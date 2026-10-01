@@ -157,7 +157,25 @@ flowchart LR
 * The Sobel kernels are Gx = [[-1,-2,-1],[0,0,0],[1,2,1]] and Gy = [[-1,0,1],[-2,0,2],[-1,0,1]] (eqs. 2–3).
 * λ<sub>G</sub> = 0.1 is the best value in the paper's sweep over 1e-4 … 1 (Fig. 4).
 
-The paper does not specify three implementation details, so the notebook fixes them:
+**One ambiguity matters a lot: how big the MGE term is.** The paper prints raw Sobel kernels and λ<sub>G</sub> = 0.1,
+but also describes MSE as the *main* component and MGE as an *auxiliary* one. Taken literally, with raw kernels,
+0.1·MGE is **≈ 3× the MSE** on real images. With the usual ÷8 normalisation of the Sobel kernels it is
+**≈ 0.05× the MSE**. That is auxiliary, and about the scale of the authors' own (unused) `GraLoss.py`, which divides
+its gradient error by 100.
+
+A short ablation (×8, BSD300, 15 epochs, the same seed, CPU) decides it:
+
+| loss | test PSNR / SSIM after 15 epochs |
+|---|---|
+| MSE | 21.17 dB / 0.510 |
+| MixGE, raw Sobel kernels (literal) | 20.76 dB / 0.461 |
+| **MixGE, Sobel ÷ 8 (default)** | **21.34 dB / 0.510** |
+| (bicubic) | 21.34 dB / 0.495 |
+
+Only the normalised version reproduces the paper's finding that MixGE beats MSE (its Fig. 4). The notebook therefore
+uses `SOBEL_NORM=True`; set `SOBEL_NORM=False` for the literal formula.
+
+Three smaller details the paper leaves open are fixed as follows:
 
 * the Sobel filter runs on every RGB channel;
 * valid convolution, i.e. no padding;
@@ -287,6 +305,7 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 | learning rate | 1e-3, halved every 25 epochs | 1e-3 (`argdemo.txt`); MultiStepLR at 50/100/150/200 | 1e-3, `StepLR(25, 0.5)` |
 | epochs | not stated | `-n 300` in the README example | 300 |
 | loss | MSE (UnetSR), MixGE with λ<sub>G</sub> = 0.1 (UnetSR+) | L1 + 0.1·(1 − SSIM) | `LOSS="mixge"` (`"mse"`, `"l1_ssim"`) |
+| Sobel scale in MGE | raw ±1/±2 kernels printed; MGE described as "auxiliary" | `GraLoss` divides by 100 (unused) | kernels ÷ 8 (`SOBEL_NORM=True`), see §2 |
 | initialisation | not stated | PyTorch default (`weight_init` is a no-op) | PyTorch default |
 | augmentation | none | none | none (`AUGMENT=True` optional) |
 | seed | not stated | 123 (set *after* the model is built) | 123, set *before* the model is built |
@@ -375,7 +394,7 @@ The repository is a 2019 fork of [`icpm/super-resolution`](https://github.com/ic
 | `CenterCrop` is commented out in `dataset/data.py` | non-square photos give mismatched SR/HR shapes and crash | explicit, named protocols (§5) |
 | `UNet.weight_init()` loops over the top-level blocks only | the conv layers keep PyTorch's default init | the same default init, documented |
 | `Unet/solver.py` optimises L1 + 0.1·(1−SSIM) | not the paper's MSE / MixGE | all three losses available; MixGE is the default |
-| `Unet/GraLoss.py` applies the 2nd Sobel to the *output* of the 1st, pads by 2, and uses arbitrary /100, /10000 scaling; it is computed but never used | not the paper's MGE | paper eqs. (2)–(6) implemented as written |
+| `Unet/GraLoss.py` applies the 2nd Sobel to the *output* of the 1st, pads by 2, and uses arbitrary /100, /10000 scaling; it is computed but never used | not the paper's MGE | paper eqs. (2)–(6), with the Sobel kernels ÷ 8 by default (see §2) |
 | `torch.manual_seed` is called *after* the model is built; `listdir` order is unsorted | runs are not reproducible | seed before the model, sorted file lists, resumable checkpoints |
 | `scheduler.step(epoch)` (deprecated) with MultiStepLR 50/100/150/200 | differs from the paper's "halve every 25 epochs" | `StepLR(25, 0.5)` as in the paper |
 | `torch.save(model)` pickles the whole module; `Unet/output.py` is broken (`self` at module level) | the checkpoints are not portable | `state_dict` checkpoints, safe with `weights_only=True` |
