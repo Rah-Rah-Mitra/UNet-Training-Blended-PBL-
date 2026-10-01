@@ -20,7 +20,7 @@ Command line::
     python download_datasets.py                           # every dataset
     python download_datasets.py --datasets bsd300 set14   # a subset (case-insensitive)
     python download_datasets.py --root "D:/My Data"       # another data folder
-    python download_datasets.py --force                   # re-download; old copy replaced on success
+    python download_datasets.py --force                   # re-download; old copy kept until success
     python download_datasets.py --verify-only             # recount and re-hash; no downloads
     python download_datasets.py --list-sources            # the ordered sources of each dataset
     python download_datasets.py --timeout 60              # network timeout in seconds (default 30)
@@ -43,8 +43,8 @@ How it works:
   the next source: a network or HTTP error, a timeout, a checksum mismatch, a bad archive or
   a wrong image count.
 * Every URL is tried up to 3 times with exponential backoff, unless the error is permanent
-  (e.g. HTTP 403/404). urllib uses the standard proxy variables (``HTTPS_PROXY``, ``NO_PROXY``, ...).
-  TLS certificates are always verified.
+  (e.g. HTTP 403/404). urllib uses the standard proxy variables (``HTTPS_PROXY``,
+  ``NO_PROXY``, ...). TLS certificates are always verified.
 * Downloads are streamed to a temporary file in ``<root>/.downloads/`` and moved into place
   when complete. Archives are extracted into a temporary folder there. A dataset folder is
   created or replaced only after the new copy has been fully verified, so a failed attempt
@@ -128,7 +128,9 @@ MANIFEST_PATH = Path(__file__).resolve().parent / "dataset_manifest.json"
 PROVENANCE_NAME = "PROVENANCE.json"
 DOWNLOADS_DIRNAME = ".downloads"
 
-USER_AGENT = f"pbl-download-datasets/1.0 (Python {sys.version_info[0]}.{sys.version_info[1]} urllib)"
+USER_AGENT = (
+    f"pbl-download-datasets/1.0 (Python {sys.version_info[0]}.{sys.version_info[1]} urllib)"
+)
 HTTP_ATTEMPTS = 3
 RETRY_BACKOFF = (1.0, 2.0, 4.0)  # wait (s) after failed attempt 1, 2, 3; 3 attempts use 1 s and 2 s
 RETRYABLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
@@ -140,14 +142,19 @@ LICENCE_NOTES = {
         "Berkeley Segmentation Dataset \u2014 free for non-commercial research and educational "
         "purposes (see https://www2.eecs.berkeley.edu/Research/Projects/CS/vision/bsds/)"
     ),
-    "SET14": "Set14 benchmark (Zeyde et al. 2010); classic test images used for research benchmarking",
+    "SET14": (
+        "Set14 benchmark (Zeyde et al. 2010); classic test images used for research benchmarking"
+    ),
     "ICDAR2003": (
-        "ICDAR 2003 Robust Reading Competition data (Lucas et al.), distributed by IAPR-TC11 for research"
+        "ICDAR 2003 Robust Reading Competition data (Lucas et al.), distributed by IAPR-TC11 "
+        "for research"
     ),
 }
 
 _BSDS_TARBALL = "https://www2.eecs.berkeley.edu/Research/Projects/CS/vision/bsds/BSDS300-images.tgz"
-_BSDS_TARBALL_HTTP = "http://www2.eecs.berkeley.edu/Research/Projects/CS/vision/bsds/BSDS300-images.tgz"
+_BSDS_TARBALL_HTTP = (
+    "http://www2.eecs.berkeley.edu/Research/Projects/CS/vision/bsds/BSDS300-images.tgz"
+)
 _BSDS_MIRROR = (
     "https://raw.githubusercontent.com/BUPTLdy/pytorch-lapsrn/"
     "6948718c86c9ff722954146c7ecbea15f00033c9/dataset/BSDS300"
@@ -156,7 +163,9 @@ _SET14_MIRROR = (
     "https://raw.githubusercontent.com/jbhuang0604/SelfExSR/"
     "8f6dd8c1d20cb7e8792a7177b4f6fd677633f598/data/Set14/image_SRF_2"
 )
-_SET14_TARBALL = "https://huggingface.co/datasets/eugenesiow/Set14/resolve/main/data/Set14_HR.tar.gz"
+_SET14_TARBALL = (
+    "https://huggingface.co/datasets/eugenesiow/Set14/resolve/main/data/Set14_HR.tar.gz"
+)
 _ICDAR_IAPR = "http://www.iapr-tc11.org/dataset/ICDAR2003_RobustReading"
 _ICDAR_ESSEX = "http://algoval.essex.ac.uk/icdar/datasets"
 _ICDAR_TRAIN_SHA256 = "9d86df514eb09dd693fb0b8c671ef54a0cfe02e803b1bbef9fc676061502eb94"  # docTR
@@ -166,7 +175,7 @@ _ICDAR_TEST_SHA256 = "dbc4b5fd5d04616b8464a1b42ea22db351ee22c2546dd15ac35611857e
 _SET14_NAMES = (
     "baboon", "barbara", "bridge", "coastguard", "comic", "face", "flowers",
     "foreman", "lenna", "man", "monarch", "pepper", "ppt3", "zebra",
-)
+)  # fmt: skip
 
 _SHA256_HEX = re.compile(r"[0-9a-fA-F]{64}")
 _SAFE_RELATIVE = re.compile(r"[A-Za-z0-9_-]+/[A-Za-z0-9_-][A-Za-z0-9._-]*")  # "<split>/<file>"
@@ -330,6 +339,7 @@ class _Fetched:
     verification: str
     warnings: list[str] = field(default_factory=list)
     deviations: dict[str, str] = field(default_factory=dict)  # "split/file" -> sha256 on disk
+    note: str = ""  # remark about the source's data, copied into PROVENANCE.json
 
 
 @dataclass
@@ -352,7 +362,7 @@ _Layout = Callable[[Path, str], Iterator[tuple[str, Path, str]]]
 
 @dataclass(frozen=True)
 class _ArchiveSource:
-    """Archives that are downloaded (or taken from .downloads/), checked, extracted and normalised."""
+    """Archives that are downloaded (or taken from .downloads/), checked, extracted, normalised."""
 
     key: str
     label: str
@@ -381,12 +391,14 @@ class _ArchiveSource:
         checks = [f"{a.filename} sha256 verified" for a in self.archives if a.sha256]
         checked, deviations = _compare_with_manifest(spec.name, stage)
         if checked:
-            checks.append(f"{checked - len(deviations)}/{checked} images match dataset_manifest.json")
+            checks.append(
+                f"{checked - len(deviations)}/{checked} images match dataset_manifest.json"
+            )
         if deviations:
             warnings.append(
-                f"{len(deviations)} of {checked} images differ from the dataset_manifest.json sha256; "
-                "kept, because this archive's bytes may legitimately differ from the mirror "
-                "(recorded in PROVENANCE.json)"
+                f"{len(deviations)} of {checked} images differ from the dataset_manifest.json "
+                "sha256; kept, because this archive's bytes may legitimately differ from the "
+                "mirror (recorded in PROVENANCE.json)"
             )
         status = "warning" if deviations else "verified" if checks else "counts only"
         verification = f"{status}: " + ("; ".join(checks) or "no published checksum")
@@ -424,13 +436,14 @@ class _MirrorSource:
     base_url: str
     url_pattern: str  # how file URLs look, for messages; "{base}" stands for base_url
     list_files: Callable[[_Context, str, Path], list[_MirrorFile]]
+    note: str = ""  # remark about this mirror's data, recorded in PROVENANCE.json
 
     def slots(self) -> list[tuple[str, str, str]]:
         """(slot, URL pattern, checksum note), for --list-sources."""
         return [(self.slot, self._pattern(), "sha256 of every file from dataset_manifest.json")]
 
     def fetch(self, spec: _DatasetSpec, ctx: _Context, work: Path) -> _Fetched:
-        """Download every file into ``work/stage/<split>/``; a checksum mismatch fails the source."""
+        """Download every file into ``work/stage/<split>/``; a checksum mismatch fails it."""
         files = self.list_files(ctx, self.base_url, work)
         ctx.report.info(f"        GET {self._pattern()} ({len(files)} files)")
         _download_files(files, work / "stage", ctx)
@@ -438,7 +451,7 @@ class _MirrorSource:
             verification = f"verified: sha256 of all {len(files)} files match dataset_manifest.json"
         else:
             verification = "counts only: dataset_manifest.json missing, sha256 not verified"
-        return _Fetched([self._pattern()], verification)
+        return _Fetched([self._pattern()], verification, note=self.note)
 
     def _pattern(self) -> str:
         return self.url_pattern.replace("{base}", self.base_url)
@@ -528,7 +541,9 @@ def _sha256_file(path: Path) -> str:
 def _rmtree(path: Path) -> None:
     """Delete a folder tree (best effort), making read-only files writable first (Windows)."""
 
-    def make_writable_and_retry(function: Callable[[str], object], target: str, _error: object) -> None:
+    def make_writable_and_retry(
+        function: Callable[[str], object], target: str, _error: object
+    ) -> None:
         os.chmod(target, stat.S_IWRITE)
         function(target)
 
@@ -549,7 +564,7 @@ def _remove_if_empty(folder: Path) -> None:
         folder.rmdir()
 
 
-# ----------------------------------------------------------------------------- manifest and provenance
+# ------------------------------------------------------------------------ manifest and provenance
 
 
 @cache
@@ -565,8 +580,8 @@ def _load_manifest() -> dict[str, Any] | None:
     except (OSError, ValueError) as exc:  # json.JSONDecodeError is a ValueError
         problem = f"unreadable ({exc})"
     _warn(
-        f"{MANIFEST_PATH} {problem}: per-file SHA-256 checks are disabled and the GitHub "
-        "mirrors use built-in file lists (reduced verification)"
+        f"{MANIFEST_PATH} {problem}: per-file SHA-256 checks are disabled (reduced verification); "
+        "the GitHub mirrors use the BSDS iids_*.txt lists and the built-in Set14 names instead"
     )
     return None
 
@@ -586,9 +601,10 @@ def _manifest_files(name: str) -> dict[str, tuple[str, str | None]] | None:
     for rel, value in files.items():
         if not (_SAFE_RELATIVE.fullmatch(rel) and rel.split("/")[0] in EXPECTED_COUNTS[name]):
             continue
-        sha256, source = (value, None) if isinstance(value, str) else (None, None)
-        if isinstance(value, dict):
+        if isinstance(value, dict):  # {"source": "<file on the mirror>", "sha256": "..."}
             sha256, source = value.get("sha256"), value.get("source")
+        else:  # plain "<sha256>"
+            sha256, source = value, None
         valid_source = source is None or (isinstance(source, str) and _SAFE_NAME.fullmatch(source))
         if not (isinstance(sha256, str) and _SHA256_HEX.fullmatch(sha256) and valid_source):
             _warn(f"ignoring the malformed {MANIFEST_PATH.name} entry {name}: {rel}")
@@ -699,10 +715,11 @@ def _explain_error(exc: BaseException, url: str, timeout: float) -> tuple[str, b
     if isinstance(cause, socket.gaierror):  # only "temporary failure" is worth another attempt
         transient = cause.errno == getattr(socket, "EAI_AGAIN", None)
         return f"DNS lookup failed for {host} ({cause.strerror})", transient
-    tunnel = re.search(r"Tunnel connection failed: (\d{3})", str(cause))
+    tunnel = re.search(r"Tunnel connection failed: (\d{3})", str(cause))  # HTTPS via a proxy
     if tunnel:
         code = int(tunnel.group(1))
-        return f"HTTP {code} from proxy/firewall (CONNECT to {host} refused)", code in RETRYABLE_HTTP_STATUS
+        reason = f"HTTP {code} from proxy/firewall (CONNECT to {host} refused)"
+        return reason, code in RETRYABLE_HTTP_STATUS
     if isinstance(cause, ConnectionRefusedError):
         proxy = _proxy_for(url)
         return f"connection refused by {f'proxy {proxy}' if proxy else host}", True
@@ -727,7 +744,10 @@ def _download_once(url: str, dest: Path, ctx: _Context, progress_label: str | No
     digest, size, started = hashlib.sha256(), 0, time.monotonic()
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with os.fdopen(fd, "wb") as out, urllib.request.urlopen(request, timeout=ctx.timeout) as response:
+        with (
+            os.fdopen(fd, "wb") as out,
+            urllib.request.urlopen(request, timeout=ctx.timeout) as response,
+        ):
             if response.headers.get_content_type() == "text/html":
                 raise _SourceError("got an HTML page instead of the file (login or error page?)")
             length = response.headers.get("Content-Length")
@@ -736,20 +756,25 @@ def _download_once(url: str, dest: Path, ctx: _Context, progress_label: str | No
                 out.write(chunk)
                 digest.update(chunk)
                 size += len(chunk)
-                if progress_label and total:
-                    ctx.report.progress(
-                        f"        {progress_label}: {_size(size)} / {_size(total)} ({100 * size // total}%)"
+                if progress_label:
+                    shown = (
+                        f"{_size(size)} / {_size(total)} ({100 * size // total}%)"
+                        if total
+                        else _size(size)
                     )
-                elif progress_label:
-                    ctx.report.progress(f"        {progress_label}: {_size(size)}")
+                    ctx.report.progress(f"        {progress_label}: {shown}")
         if total is not None and size != total:
-            raise _SourceError(f"connection closed early ({_size(size)} of {_size(total)})", retryable=True)
+            raise _SourceError(
+                f"connection closed early ({_size(size)} of {_size(total)})", retryable=True
+            )
         os.replace(tmp, dest)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
     if progress_label:
-        ctx.report.info(f"        {progress_label}: {_size(size)} in {time.monotonic() - started:.1f}s")
+        ctx.report.info(
+            f"        {progress_label}: {_size(size)} in {time.monotonic() - started:.1f}s"
+        )
     return _Download(size, digest.hexdigest())
 
 
@@ -762,11 +787,17 @@ def _download(url: str, dest: Path, ctx: _Context, progress_label: str | None = 
         try:
             return _download_once(url, dest, ctx, progress_label)
         except Exception as exc:  # classified below; KeyboardInterrupt is not caught
+            if isinstance(exc, urllib.error.HTTPError):
+                exc.close()  # an error response still holds its connection
             reason, retryable = _explain_error(exc, url, ctx.timeout)
             if not retryable or attempt == HTTP_ATTEMPTS:
-                raise _SourceError(reason + (f" (after {attempt} attempts)" if attempt > 1 else "")) from exc
+                raise _SourceError(
+                    reason + (f" (after {attempt} attempts)" if attempt > 1 else "")
+                ) from exc
             delay = RETRY_BACKOFF[attempt - 1]
-            ctx.report.info(f"        {reason}; attempt {attempt + 1}/{HTTP_ATTEMPTS} in {delay:g}s: {url}")
+            ctx.report.info(
+                f"        {reason}; attempt {attempt + 1}/{HTTP_ATTEMPTS} in {delay:g}s: {url}"
+            )
             time.sleep(delay)
     raise AssertionError("unreachable")
 
@@ -863,10 +894,11 @@ def _extract(archive: Path, dest: Path) -> None:
     except _UNSAFE_ARCHIVE_ERRORS as exc:
         raise _SourceError(f"unsafe archive {archive.name} refused: {exc}") from exc
     except (tarfile.TarError, zipfile.BadZipFile, gzip.BadGzipFile, zlib.error, EOFError) as exc:
+        detail = str(exc).splitlines()[0].rstrip(": ") if str(exc) else type(exc).__name__
         with open(archive, "rb") as handle:
             looks_like_html = handle.read(512).lstrip().lower().startswith((b"<!doctype", b"<html"))
         hint = " (the file is a web page, not an archive)" if looks_like_html else ""
-        raise _SourceError(f"bad archive {archive.name}: {exc or type(exc).__name__}{hint}") from exc
+        raise _SourceError(f"bad archive {archive.name}: {detail}{hint}") from exc
 
 
 def _image_files(top: Path) -> Iterator[Path]:
@@ -893,14 +925,17 @@ def _layout_flat(extracted: Path, split: str) -> Iterator[tuple[str, Path, str]]
 
 
 def _layout_icdar(extracted: Path, split: str) -> Iterator[tuple[str, Path, str]]:
-    """ICDAR 2003 zip: ``<top>/<dir>/<image>`` becomes ``<dir>_<image>``, limited to [A-Za-z0-9._-]."""
+    """ICDAR 2003 zip: ``<top>/<dir>/<image>`` becomes ``<dir>_<image>`` in [A-Za-z0-9._-]."""
     for path in _image_files(extracted):
         name = path.name if path.parent == extracted else f"{path.parent.name}_{path.name}"
         yield split, path, re.sub(r"[^A-Za-z0-9._-]", "_", name)
 
 
 def _stage_images(
-    items: Iterable[tuple[str, Path, str]], stage: Path, taken: dict[str, set[str]], warnings: list[str]
+    items: Iterable[tuple[str, Path, str]],
+    stage: Path,
+    taken: dict[str, set[str]],
+    warnings: list[str],
 ) -> None:
     """Move normalised images into stage/<split>/<name>, renaming case-insensitive duplicates."""
     for split, path, name in items:
@@ -924,13 +959,21 @@ def _bsd300_mirror_files(ctx: _Context, base: str, work: Path) -> list[_MirrorFi
     """BSDS300 files on the mirror: names and hashes from the manifest, else from iids_*.txt."""
     entries = _manifest_files("BSD300")
     if entries:
-        return [_MirrorFile(rel, f"{base}/images/{rel}", sha) for rel, (sha, _) in sorted(entries.items())]
+        return [
+            _MirrorFile(rel, f"{base}/images/{rel}", sha)
+            for rel, (sha, _) in sorted(entries.items())
+        ]
     files = []
     for split in EXPECTED_COUNTS["BSD300"]:
         listing = work / f"iids_{split}.txt"
         _download(f"{base}/iids_{split}.txt", listing, ctx)
-        image_ids = [i for i in listing.read_text(encoding="ascii", errors="replace").split() if i.isdigit()]
-        files += [_MirrorFile(f"{split}/{i}.jpg", f"{base}/images/{split}/{i}.jpg", None) for i in image_ids]
+        image_ids = [
+            i for i in listing.read_text(encoding="ascii", errors="replace").split() if i.isdigit()
+        ]
+        files += [
+            _MirrorFile(f"{split}/{i}.jpg", f"{base}/images/{split}/{i}.jpg", None)
+            for i in image_ids
+        ]
     return files
 
 
@@ -938,7 +981,10 @@ def _set14_mirror_files(_ctx: _Context, base: str, _work: Path) -> list[_MirrorF
     """Set14 files on the mirror, saved under canonical names (manifest, else built-in list)."""
     entries = _manifest_files("SET14")
     if entries and all(source for _, source in entries.values()):
-        return [_MirrorFile(rel, f"{base}/{source}", sha) for rel, (sha, source) in sorted(entries.items())]
+        return [
+            _MirrorFile(rel, f"{base}/{source}", sha)
+            for rel, (sha, source) in sorted(entries.items())
+        ]
     return [
         _MirrorFile(f"test/{name}.png", f"{base}/img_{number:03d}_SRF_2_HR.png", None)
         for number, name in enumerate(_SET14_NAMES, 1)
@@ -975,8 +1021,8 @@ _SPECS: dict[str, _DatasetSpec] = {
             ),
         ),
         unpack_hint=(
-            "(Or unpack it yourself so that BSDS300/images/train/*.jpg end up in {root}/BSD300/train/ "
-            "and BSDS300/images/test/*.jpg in {root}/BSD300/test/.)"
+            "(Or unpack it yourself so that BSDS300/images/train/*.jpg end up in "
+            "{root}/BSD300/train/ and BSDS300/images/test/*.jpg in {root}/BSD300/test/.)"
         ),
     ),
     "SET14": _DatasetSpec(
@@ -991,6 +1037,10 @@ _SPECS: dict[str, _DatasetSpec] = {
                 _SET14_MIRROR,
                 "{base}/img_NNN_SRF_2_HR.png",
                 _set14_mirror_files,
+                note=(
+                    "these HR images are mod-cropped to a multiple of 2: comic, ppt3 and zebra "
+                    "lose at most one pixel row or column compared with the original Set14 images"
+                ),
             ),
             _ArchiveSource(
                 "huggingface",
@@ -1010,10 +1060,20 @@ _SPECS: dict[str, _DatasetSpec] = {
                 "iapr-tc11",
                 "official IAPR-TC11 host (plain http)",
                 (
-                    _Archive("icdar2003-iapr-train", f"{_ICDAR_IAPR}/TrialTrain/scene.zip",
-                             "icdar2003_train.zip", _ICDAR_TRAIN_SHA256, "train"),
-                    _Archive("icdar2003-iapr-test", f"{_ICDAR_IAPR}/TrialTest/scene.zip",
-                             "icdar2003_test.zip", _ICDAR_TEST_SHA256, "test"),
+                    _Archive(
+                        "icdar2003-iapr-train",
+                        f"{_ICDAR_IAPR}/TrialTrain/scene.zip",
+                        "icdar2003_train.zip",
+                        _ICDAR_TRAIN_SHA256,
+                        "train",
+                    ),
+                    _Archive(
+                        "icdar2003-iapr-test",
+                        f"{_ICDAR_IAPR}/TrialTest/scene.zip",
+                        "icdar2003_test.zip",
+                        _ICDAR_TEST_SHA256,
+                        "test",
+                    ),
                 ),
                 _layout_icdar,
             ),
@@ -1021,10 +1081,20 @@ _SPECS: dict[str, _DatasetSpec] = {
                 "essex",
                 "fallback host algoval.essex.ac.uk (plain http)",
                 (
-                    _Archive("icdar2003-essex-train", f"{_ICDAR_ESSEX}/TrialTrain/scene.zip",
-                             "icdar2003_train.zip", _ICDAR_TRAIN_SHA256, "train"),
-                    _Archive("icdar2003-essex-test", f"{_ICDAR_ESSEX}/TrialTest/scene.zip",
-                             "icdar2003_test.zip", _ICDAR_TEST_SHA256, "test"),
+                    _Archive(
+                        "icdar2003-essex-train",
+                        f"{_ICDAR_ESSEX}/TrialTrain/scene.zip",
+                        "icdar2003_train.zip",
+                        _ICDAR_TRAIN_SHA256,
+                        "train",
+                    ),
+                    _Archive(
+                        "icdar2003-essex-test",
+                        f"{_ICDAR_ESSEX}/TrialTest/scene.zip",
+                        "icdar2003_test.zip",
+                        _ICDAR_TEST_SHA256,
+                        "test",
+                    ),
                 ),
                 _layout_icdar,
             ),
@@ -1057,7 +1127,9 @@ def _canonical_names(names: str | Iterable[str]) -> list[str]:
 
 
 def _all_slots() -> set[str]:
-    return {slot for spec in _SPECS.values() for source in spec.sources for slot, _, _ in source.slots()}
+    return {
+        slot for spec in _SPECS.values() for source in spec.sources for slot, _, _ in source.slots()
+    }
 
 
 def _set_source_overrides(items: Iterable[str]) -> None:
@@ -1072,7 +1144,9 @@ def _set_source_overrides(items: Iterable[str]) -> None:
         slot, _, value = item.partition("=")
         slot = slot.strip().lower()
         if slot not in known:
-            raise ValueError(f"unknown source slot {slot!r} in {item!r}; known: {', '.join(sorted(known))}")
+            raise ValueError(
+                f"unknown source slot {slot!r} in {item!r}; known: {', '.join(sorted(known))}"
+            )
         url, _, fragment = value.strip().partition("#")
         sha256 = fragment.removeprefix("sha256=") if fragment else None
         if not url or (sha256 is not None and not _SHA256_HEX.fullmatch(sha256)):
@@ -1107,13 +1181,16 @@ def _plan_sources(spec: _DatasetSpec, downloads: Path) -> list[_Source]:
         if all((downloads / a.filename).is_file() for a in source.archives):
             files = " + ".join(a.filename for a in source.archives)
             local = dataclasses.replace(
-                source, key="local-archive", label=f"drop-in archive in {downloads}: {files}", local=True
+                source,
+                key="local-archive",
+                label=f"drop-in archive in {downloads}: {files}",
+                local=True,
             )
             return [local, *sources]
     return sources
 
 
-# ----------------------------------------------------------------------------- downloading a dataset
+# -------------------------------------------------------------------------- downloading a dataset
 
 
 def _install(stage: Path, dest: Path, work: Path) -> None:
@@ -1180,6 +1257,7 @@ def _process_dataset(spec: _DatasetSpec, ctx: _Context, force: bool) -> _Result:
             fetched, counts = _attempt(spec, source, ctx, dest)
         except Exception as exc:  # any failure moves on to the next source
             reason = str(exc) if isinstance(exc, _SourceError) else f"{type(exc).__name__}: {exc}"
+            reason = " ".join(reason.split())  # always a single line
             ctx.report.info(f"        failed: {reason}")
             errors.append(f"{source.key}: {reason}")
             continue
@@ -1200,6 +1278,8 @@ def _process_dataset(spec: _DatasetSpec, ctx: _Context, force: bool) -> _Result:
             "verification": fetched.verification,
             "licence": LICENCE_NOTES[spec.name],
         }
+        if fetched.note:
+            entry["note"] = fetched.note
         if warnings:
             entry["warnings"] = warnings
         if fetched.deviations:
@@ -1210,7 +1290,9 @@ def _process_dataset(spec: _DatasetSpec, ctx: _Context, force: bool) -> _Result:
         return _Result(spec.name, True, "downloaded", dest, counts, source.key)
 
     ctx.report.warn(f"{spec.name}: all {len(plan)} sources failed")
-    return _Result(spec.name, False, "FAILED", dest, source=f"{len(plan)} sources failed", errors=errors)
+    return _Result(
+        spec.name, False, "FAILED", dest, source=f"{len(plan)} sources failed", errors=errors
+    )
 
 
 def _counts_complete(spec: _DatasetSpec, counts: dict[str, int], report: _Reporter) -> bool:
@@ -1241,7 +1323,9 @@ def _manual_instructions(spec: _DatasetSpec, root: Path) -> str:
     downloads = root / DOWNLOADS_DIRNAME
     archives = next(s for s in spec.sources if isinstance(s, _ArchiveSource)).archives
     what = "this file" if len(archives) == 1 else f"these {len(archives)} files"
-    lines = [f"  Manual download: fetch {what} (browser or another network), save as shown, then re-run:"]
+    lines = [
+        f"  Manual download: fetch {what} (browser or another network), save as shown, then re-run:"
+    ]
     for archive in archives:
         checksum = f"  (sha256 {archive.sha256})" if archive.sha256 else ""
         lines += [f"    {archive.url}", f"      -> {downloads / archive.filename}{checksum}"]
@@ -1280,8 +1364,12 @@ def _verify(spec: _DatasetSpec, root: Path, report: _Reporter) -> _Result:
         known = _known_deviations(root, spec.name)
         accepted = sum(1 for rel, sha in deviations.items() if known.get(rel) == sha)
         for rel, actual in sorted(deviations.items()):
-            if known.get(rel) != actual:
+            if rel not in known:
                 problems.append(_mismatch(rel, manifest[rel][0], actual))
+            elif known[rel] != actual:  # an accepted deviation that has changed since download
+                problems.append(
+                    _mismatch(rel, known[rel], actual) + "; expected = hash in PROVENANCE.json"
+                )
         hashes = f"sha256 of {checked} files checked against dataset_manifest.json"
         if accepted:
             hashes += f" ({accepted} known deviations recorded at download time accepted)"
@@ -1386,12 +1474,16 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog="Exit code: 0 when every requested dataset is available, 1 otherwise.",
     )
     parser.add_argument(
-        "--datasets", nargs="+", default=["all"], metavar="NAME",
+        "--datasets",
+        nargs="+",
+        default=["all"],
+        metavar="NAME",
         help="bsd300, set14, icdar2003 or all (default: all; case-insensitive)",
     )
     parser.add_argument("--root", metavar="DIR", help=f"data folder (default: {default_root()})")
     parser.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="download again even if complete; the old folder is replaced only after success",
     )
     parser.add_argument(
@@ -1401,7 +1493,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--list-sources", action="store_true", help="print the ordered sources per dataset and exit"
     )
     parser.add_argument(
-        "--timeout", type=_positive_float, default=30.0, metavar="SEC",
+        "--timeout",
+        type=_positive_float,
+        default=30.0,
+        metavar="SEC",
         help="network timeout per request in seconds (default: 30)",
     )
     # For testing only: SLOT=URL[#sha256=HEX], see the module docstring.
@@ -1432,7 +1527,10 @@ def _print_summary(results: Sequence[_Result], root: Path) -> None:
     widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
     print(f"\nSummary (root: {root})")
     for row in rows:
-        print("  " + "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip())
+        print(
+            "  "
+            + "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip()
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
