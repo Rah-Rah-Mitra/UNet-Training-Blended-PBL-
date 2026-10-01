@@ -5,7 +5,9 @@ This folder is a reproducible, single-notebook PyTorch re-implementation of
 > Z. Lu and Y. Chen, **"Single Image Super Resolution based on a Modified U-net with Mixed Gradient Loss"**,
 > arXiv:1911.09428 (2019); journal version in *Signal, Image and Video Processing* 16, 1143–1151 (2022).
 
-It is built on this repository, which is the authors' code (originally `github.com/MnisterLu/simplifiedUnetSR`).
+It is built on this repository, a fork of the authors' code
+[`Mnster00/simplifiedUnetSR`](https://github.com/Mnster00/simplifiedUnetSR) (the paper's footnote links it as
+`github.com/MnisterLu/simplifiedUnetSR`).
 Everything new lives in `PBL/`; the original code is not modified.
 
 | file | what it is |
@@ -17,6 +19,7 @@ Everything new lives in `PBL/`; the original code is not modified.
 | [`requirements.txt`](requirements.txt) | the same dependencies for `pip` / `uv pip` |
 | [`results/bicubic_calibration.csv`](results/bicubic_calibration.csv) | the needs-no-training protocol study behind §5 |
 | [`results/sanity_x8_BSD300_40ep_*`](results/) | the two short training runs of §7 (config, per-epoch history, metrics, curves) |
+| [`results/ablation_x8_BSD300_15ep_mixge_raw`](results/ablation_x8_BSD300_15ep_mixge_raw/) | the literal-Sobel MixGE run of the §2 ablation |
 
 **Contents**
 1. [Quick start](#1-quick-start-uv)
@@ -159,22 +162,29 @@ flowchart LR
 * λ<sub>G</sub> = 0.1 is the best value in the paper's sweep over 1e-4 … 1 (Fig. 4).
 
 **One ambiguity matters a lot: how big the MGE term is.** The paper prints raw Sobel kernels and λ<sub>G</sub> = 0.1,
-but also describes MSE as the *main* component and MGE as an *auxiliary* one. Taken literally, with raw kernels,
-0.1·MGE is **≈ 3× the MSE** on real images. With the usual ÷8 normalisation of the Sobel kernels it is
-**≈ 0.05× the MSE**. That is auxiliary, and about the scale of the authors' own (unused) `GraLoss.py`, which divides
-its gradient error by 100.
+but also describes MSE as the *main* component and MGE as an *auxiliary* one. On the bicubic outputs of the 100
+BSD300 test images, the two readings give:
+
+* **raw kernels, taken literally**: 0.1·MGE is **2.5–3× the MSE**;
+* **kernels ÷ 8**, the usual normalisation under which a ramp of slope 1 has a gradient of 1: 0.1·MGE is
+  **0.04–0.05× the MSE**, an auxiliary term.
+
+The notebook prints this ratio for your own run (section 7). The authors' unused `Unet/GraLoss.py` also scales its
+gradient terms down, dividing them by 100 and 10 000. On the same images it comes to 0.3–0.4× the MSE, between the
+two readings, so it does not decide the question.
 
 A short ablation (×8, BSD300, 15 epochs, the same seed, CPU) decides it:
 
-| loss | test PSNR / SSIM after 15 epochs |
-|---|---|
-| MSE | 21.17 dB / 0.510 |
-| MixGE, raw Sobel kernels (literal) | 20.76 dB / 0.461 |
-| **MixGE, Sobel ÷ 8 (default)** | **21.34 dB / 0.510** |
-| (bicubic) | 21.34 dB / 0.495 |
+| loss | test PSNR / SSIM after 15 epochs | from |
+|---|---|---|
+| MSE | 21.17 dB / 0.510 | epoch 15 of [`results/sanity_x8_BSD300_40ep_mse`](results/sanity_x8_BSD300_40ep_mse/history.csv) |
+| MixGE, raw Sobel kernels (literal, `SOBEL_NORM=False`) | 20.76 dB / 0.461 | [`results/ablation_x8_BSD300_15ep_mixge_raw`](results/ablation_x8_BSD300_15ep_mixge_raw/metrics.json) |
+| **MixGE, Sobel ÷ 8 (default)** | **21.45 dB / 0.513** | epoch 15 of [`results/sanity_x8_BSD300_40ep_mixge`](results/sanity_x8_BSD300_40ep_mixge/history.csv) |
+| (bicubic) | 21.34 dB / 0.495 | |
 
 Only the normalised version reproduces the paper's finding that MixGE beats MSE (its Fig. 4). The notebook therefore
-uses `SOBEL_NORM=True`; set `SOBEL_NORM=False` for the literal formula.
+uses `SOBEL_NORM=True`; set `SOBEL_NORM=False` for the literal formula. On one CPU, training is deterministic: a
+15-epoch run retraces the first 15 epochs of a 40-epoch run exactly.
 
 Three smaller details the paper leaves open are fixed as follows:
 
@@ -306,7 +316,7 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 | learning rate | 1e-3, halved every 25 epochs | 1e-3 (`argdemo.txt`); MultiStepLR at 50/100/150/200 | 1e-3, `StepLR(25, 0.5)` |
 | epochs | not stated | `-n 300` in the README example | 300 |
 | loss | MSE (UnetSR), MixGE with λ<sub>G</sub> = 0.1 (UnetSR+) | L1 + 0.1·(1 − SSIM) | `LOSS="mixge"` (`"mse"`, `"l1_ssim"`) |
-| Sobel scale in MGE | raw ±1/±2 kernels printed; MGE described as "auxiliary" | `GraLoss` divides by 100 (unused) | kernels ÷ 8 (`SOBEL_NORM=True`), see §2 |
+| Sobel scale in MGE | raw ±1/±2 kernels printed; MGE described as "auxiliary" | `GraLoss` divides by 100 and 10 000 (unused) | kernels ÷ 8 (`SOBEL_NORM=True`), see §2 |
 | initialisation | not stated | PyTorch default (`weight_init` is a no-op) | PyTorch default |
 | augmentation | none | none | none (`AUGMENT=True` optional) |
 | seed | not stated | 123 (set *after* the model is built) | 123, set *before* the model is built |

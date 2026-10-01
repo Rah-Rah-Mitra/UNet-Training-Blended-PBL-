@@ -6,7 +6,8 @@ uv.lock
 
 # downloaded datasets, training runs and checkpoints
 data/
-runs/
+runs/*
+!runs/.gitkeep
 *.pt
 
 # notebook / python caches
