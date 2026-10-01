@@ -47,8 +47,10 @@ The session has three jobs:
   do not open a pull request unless the user asks for one.
 * Never commit `data/`, `runs/` (except `runs/.gitkeep`), `.venv/`, `uv.lock` or `*.pt`. The `.gitignore` already
   excludes them.
-* **The notebook is the only copy of the code.** Edit its cells directly. Clear the outputs before you commit:
-  `uv run jupyter nbconvert --clear-output --inplace SimplifiedUNetSR.ipynb`.
+* **The notebook is the only copy of the code.** Edit its cells directly.
+* **The committed notebook carries the outputs of the 300-epoch ×8 GPU run** (README §7), as the user asked. Keep them
+  when you commit. If a code change makes them stale, re-run that configuration or clear the outputs with
+  `uv run jupyter nbconvert --clear-output --inplace SimplifiedUNetSR.ipynb`, and say which you did.
 * **Keep the README reproducible.** If a README command or claim does not do what the README says, fix the code or the
   README.
 * **GPU time budget: 30 minutes of training in total.** The tests below need only a few minutes; most are 2-epoch
@@ -164,7 +166,7 @@ Run **×8 on BSD300 with MixGE (UnetSR+)**, the paper's settings for up to 300 e
    * the setup deviations (Step 1);
    * the T1–T15 table (PASS / FAIL, fixes made);
    * the training result against the paper.
-2. Commit the fixes, `results/gpu_*` and the README updates, with clear messages (outputs cleared in the notebook).
+2. Commit the fixes, `results/gpu_*` and the README updates, with clear messages (see the rule above on the notebook's outputs).
    Then run `git push origin pbl/unet-sr-notebook`.
 3. Delete scratch folders you created (`empty_data`, `~/pbl_data_test`). `runs/` is git-ignored, so it can stay.
 
