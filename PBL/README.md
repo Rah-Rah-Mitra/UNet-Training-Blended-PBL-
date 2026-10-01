@@ -437,7 +437,9 @@ The repository is a 2019 fork of [`icpm/super-resolution`](https://github.com/ic
 | `--torch-backend` errors / no `cu130` choice | `uv self update` (needs uv ≥ 0.9.4) |
 | ICDAR2003 download fails ("HTTP" / timeout) | its servers are plain HTTP and often blocked: download the zips manually (URLs and SHA-256 printed by the script) into `PBL/data/.downloads/` and re-run |
 | `FileNotFoundError: ... download_datasets.py` | start Jupyter / papermill from inside `PBL/` |
+| which parameters can I pass with `-p`? | `uv run papermill --help-notebook SimplifiedUNetSR.ipynb` lists them with their defaults |
 | papermill list parameters | pass text: `-p EVAL_SETS "BSD300,SET14_ALL"` |
+| papermill prints `Kernel is running over TCP without encryption` | harmless: the notebook's kernel only listens on `127.0.0.1` (your own machine) |
 | training is slow on CPU | use `SMOKE_TEST=True` to check the pipeline; train on a GPU (batch 1, < 1 GB of VRAM) |
 | interrupted run | re-run the same command: `RESUME=True` continues from `runs/<RUN_NAME>/last.pt` |
 
