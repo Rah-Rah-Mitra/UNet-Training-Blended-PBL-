@@ -8,12 +8,14 @@ next to ``SimplifiedUNetSR.ipynb``::
     data/
       BSD300/train/*.jpg    200 images, BSDS300 train split (original names, e.g. 100075.jpg)
       BSD300/test/*.jpg     100 images, BSDS300 test split
-      SET14/test/*.png       14 images (baboon.png, barbara.png, ... zebra.png)
+      SET14/train/*.png      11 images: the 14 Set14 images (baboon.png, ... zebra.png) except
+      SET14/test/*.png        3 images: comic.png, monarch.png and zebra.png (the notebook's split)
       ICDAR2003/train/*     258 images, ICDAR 2003 Robust Reading "SceneTrialTrain"
       ICDAR2003/test/*      251 images, "SceneTrialTest" (the paper reports 249)
       PROVENANCE.json       per dataset: source, URLs, UTC time, counts, verification, licence
 
-Image files are stored byte for byte as downloaded; nothing is decoded or re-encoded.
+Image files are stored byte for byte as downloaded; nothing is decoded or re-encoded. Only the
+split folders (train/, test/) are written; anything else inside a dataset folder is left alone.
 
 Command line::
 
@@ -23,7 +25,8 @@ Command line::
     python download_datasets.py --force                   # re-download; old copy kept until success
     python download_datasets.py --verify-only             # recount and re-hash; no downloads
     python download_datasets.py --list-sources            # the ordered sources of each dataset
-    python download_datasets.py --timeout 60              # network timeout in seconds (default 30)
+    python download_datasets.py --timeout 60              # network timeout in seconds (default 30;
+                                                          # see "How it works")
 
 The exit code is 0 when every requested dataset is ready and 1 when at least one failed.
 A summary table is printed at the end.
@@ -45,10 +48,18 @@ How it works:
 * Every URL is tried up to 3 times with exponential backoff, unless the error is permanent
   (e.g. HTTP 403/404). urllib uses the standard proxy variables (``HTTPS_PROXY``,
   ``NO_PROXY``, ...). TLS certificates are always verified.
-* Downloads are streamed to a temporary file in ``<root>/.downloads/`` and moved into place
-  when complete. Archives are extracted into a temporary folder there. A dataset folder is
-  created or replaced only after the new copy has been fully verified, so a failed attempt
-  leaves nothing behind.
+* The timeout (``--timeout``, default 30 s) applies to connecting and to every wait for data:
+  an attempt fails when the server sends nothing for that long, and also when a download
+  makes less than 1 kB of progress in that time (a stalled or trickling connection). It is
+  not a limit on the total download time, so large files work on slow connections.
+* Each attempt works in its own temporary folder in ``<root>/.downloads/``: downloads are
+  streamed to temporary files there and moved into place when complete, and archives are
+  extracted there. The split folders of a dataset are created or replaced only after the new
+  copy has been fully verified, so a failed attempt leaves nothing behind. Leftovers of a run
+  that was killed (e.g. a kernel restart) are deleted by the next run; a lock file per
+  temporary folder keeps that from touching a download that is still running.
+* Ctrl-C (or interrupting the Jupyter kernel) stops a run at once; no new requests or retries
+  start after it.
 * Drop-in archives: a file saved as ``<root>/.downloads/<name>`` is used before any network
   source, after checksum verification where a checksum is known. The names are
   ``BSDS300-images.tgz``, ``Set14_HR.tar.gz``, and ``icdar2003_train.zip`` with
@@ -72,8 +83,8 @@ import gzip
 import hashlib
 import http.client
 import json
-import math
 import os
+import queue
 import re
 import shutil
 import socket
@@ -90,7 +101,6 @@ import urllib.request
 import zipfile
 import zlib
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import cache
@@ -117,7 +127,7 @@ __all__ = [
 DATASETS = ("BSD300", "SET14", "ICDAR2003")
 EXPECTED_COUNTS = {
     "BSD300": {"train": 200, "test": 100},
-    "SET14": {"test": 14},
+    "SET14": {"train": 11, "test": 3},  # test = comic, monarch, zebra (see _SET14_TEST)
     "ICDAR2003": {"train": 258, "test": 251},
 }
 
@@ -135,7 +145,10 @@ HTTP_ATTEMPTS = 3
 RETRY_BACKOFF = (1.0, 2.0, 4.0)  # wait (s) after failed attempt 1, 2, 3; 3 attempts use 1 s and 2 s
 RETRYABLE_HTTP_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 CHUNK_SIZE = 1 << 16
+STALL_BYTES = 1024  # a download must make this much progress within every timeout period
+MAX_TIMEOUT = 86400.0  # 1 day; far larger values overflow the socket layer
 MIRROR_WORKERS = 8  # parallel requests for the one-request-per-file GitHub mirrors
+WORKER_GRACE = 1.0  # seconds to wait for busy download threads after a failure or Ctrl-C
 
 LICENCE_NOTES = {
     "BSD300": (
@@ -176,11 +189,20 @@ _SET14_NAMES = (
     "baboon", "barbara", "bridge", "coastguard", "comic", "face", "flowers",
     "foreman", "lenna", "man", "monarch", "pepper", "ppt3", "zebra",
 )  # fmt: skip
+# The notebook's SET14 test split (the paper's bicubic numbers are reproduced only with these
+# three images); the other 11 images are the training split.
+_SET14_TEST = frozenset({"comic", "monarch", "zebra"})
+_SET14_ALIASES = {"lena": "lenna", "peppers": "pepper"}  # spellings used by some Set14 copies
 
 _SHA256_HEX = re.compile(r"[0-9a-fA-F]{64}")
 _SAFE_RELATIVE = re.compile(r"[A-Za-z0-9_-]+/[A-Za-z0-9_-][A-Za-z0-9._-]*")  # "<split>/<file>"
 _SAFE_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 _TAR_DATA_FILTER = hasattr(tarfile, "data_filter")  # Python >= 3.12 and the security backports
+# What this script creates in <root>/.downloads/: a lock file and a work folder per attempt
+# ("<NAME>-<random>.lock" / ".tmp"); older versions also left "download-<random>.part" there.
+_TEMPORARY_NAME = re.compile(
+    r"(?:BSD300|SET14|ICDAR2003)-[a-z0-9_]+\.(?:tmp|lock)|download-[a-z0-9_]+\.part"
+)
 
 _LICENCES_SHOWN: set[str] = set()  # licence notes are printed once per process
 _OVERRIDES: dict[str, tuple[str, str | None]] = {}  # testing hook: slot -> (url, sha256)
@@ -215,6 +237,10 @@ class _SourceError(Exception):
         self.retryable = retryable
 
 
+class _Cancelled(Exception):
+    """A download thread stopped because the run failed elsewhere or was interrupted."""
+
+
 class _UnsafeArchiveError(Exception):
     """An archive member has an absolute path, escapes the target folder, or is a link/device."""
 
@@ -238,6 +264,24 @@ def _write(stream: TextIO, text: str) -> None:
     stream.flush()
 
 
+def _print(text: str = "") -> None:
+    """print() for the command line that cannot fail on characters the console lacks."""
+    _write(sys.stdout, text + "\n")
+
+
+def _safe_console() -> None:
+    """Let stdout/stderr replace unencodable characters instead of raising.
+
+    A path such as ``C:/Users/Иван/data`` cannot be printed to a cp1252 pipe or file, which
+    would otherwise end a successful run with a UnicodeEncodeError (argparse's --help too).
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None and getattr(stream, "errors", "strict") == "strict":
+            with contextlib.suppress(Exception):
+                reconfigure(errors="replace")
+
+
 def _warn(message: str) -> None:
     """Print a warning to stderr (also when quiet)."""
     _write(sys.stderr, f"WARNING: {message}\n")
@@ -256,9 +300,10 @@ def _is_interactive(stream: TextIO) -> bool:
 class _Reporter:
     """Console output for one run.
 
-    ``info`` lines and the progress line are suppressed when quiet; warnings always go to
-    stderr. The progress line redraws itself with ``\\r`` only on terminals and in Jupyter,
-    so captured logs stay clean.
+    ``info`` lines and progress are suppressed when quiet; warnings always go to stderr. On
+    terminals and in Jupyter the progress line redraws itself with ``\\r``. Elsewhere (a pipe,
+    a file, a CI log) progress is logged as ordinary lines: one per 10 % step at most every
+    2 s, or every 10 s when the total size is unknown, so captured logs stay readable.
     """
 
     def __init__(self, quiet: bool = False) -> None:
@@ -267,7 +312,9 @@ class _Reporter:
         self._live = not quiet and _is_interactive(self._out)
         self._lock = threading.Lock()
         self._progress_width = 0  # length of the progress line on screen (0: none)
-        self._last_draw = 0.0
+        self._last_draw = 0.0  # live mode: time of the last redraw
+        self._last_logged = 0.0  # log mode: time of the last progress line (or of the start)
+        self._last_step = 0  # log mode: last 10 % step that was logged
 
     def info(self, message: str) -> None:
         """Print a normal message unless quiet."""
@@ -278,15 +325,37 @@ class _Reporter:
         """Print a warning to stderr, even when quiet."""
         self._line(sys.stderr, f"WARNING: {message}")
 
-    def progress(self, text: str) -> None:
-        """Redraw the transient progress line (at most five times per second)."""
-        now = time.monotonic()
-        if not self._live or now - self._last_draw < 0.2:
+    def start_progress(self) -> None:
+        """A new transfer starts: restart the spacing of logged progress lines."""
+        self._last_logged = time.monotonic()
+        self._last_step = 0
+
+    def progress(self, text: str, fraction: float | None = None) -> None:
+        """Show progress: redraw the live line (at most 5 times per second) or log a line.
+
+        ``fraction`` is the share done (0..1), or None when the total is unknown.
+        """
+        if self.quiet:
             return
-        with self._lock:
-            self._last_draw = now
-            _write(self._out, "\r" + text.ljust(self._progress_width))
-            self._progress_width = len(text)
+        now = time.monotonic()
+        if self._live:
+            if now - self._last_draw < 0.2:
+                return
+            with self._lock:
+                self._last_draw = now
+                _write(self._out, "\r" + text.ljust(self._progress_width))
+                self._progress_width = len(text)
+            return
+        if fraction is None:
+            if now - self._last_logged < 10.0:
+                return
+        else:
+            step = int(fraction * 10)
+            if step <= self._last_step or step >= 10 or now - self._last_logged < 2.0:
+                return
+            self._last_step = step
+        self._last_logged = now
+        self._line(self._out, text)
 
     def _line(self, stream: TextIO, message: str) -> None:
         with self._lock:
@@ -338,7 +407,9 @@ class _Fetched:
     urls: list[str]
     verification: str
     warnings: list[str] = field(default_factory=list)
-    deviations: dict[str, str] = field(default_factory=dict)  # "split/file" -> sha256 on disk
+    # differences from dataset_manifest.json that were accepted (official archives only):
+    # "split/file" -> sha256 on disk, or None for a manifest file the archive did not contain
+    deviations: dict[str, str | None] = field(default_factory=dict)
     note: str = ""  # remark about the source's data, copied into PROVENANCE.json
 
 
@@ -389,16 +460,15 @@ class _ArchiveSource:
             _stage_images(self.layout(extracted, archive.split), stage, taken, warnings)
 
         checks = [f"{a.filename} sha256 verified" for a in self.archives if a.sha256]
-        checked, deviations = _compare_with_manifest(spec.name, stage)
-        if checked:
-            checks.append(
-                f"{checked - len(deviations)}/{checked} images match dataset_manifest.json"
-            )
-        if deviations:
+        manifest = _compare_with_manifest(spec, stage)
+        deviations = manifest.deviations() if manifest else {}
+        if manifest:
+            checks.append(f"{manifest.matched}/{manifest.total} images match dataset_manifest.json")
+        if manifest and deviations:
             warnings.append(
-                f"{len(deviations)} of {checked} images differ from the dataset_manifest.json "
-                "sha256; kept, because this archive's bytes may legitimately differ from the "
-                "mirror (recorded in PROVENANCE.json)"
+                f"the images differ from dataset_manifest.json ({manifest.describe()}); kept, "
+                "because this archive's bytes may legitimately differ from the mirror "
+                "(recorded in PROVENANCE.json)"
             )
         status = "warning" if deviations else "verified" if checks else "counts only"
         verification = f"{status}: " + ("; ".join(checks) or "no published checksum")
@@ -492,13 +562,18 @@ def _is_image_name(name: str) -> bool:
     return not name.startswith(".") and os.path.splitext(name)[1].lower() in IMAGE_EXTENSIONS
 
 
-def _count_images(folder: Path) -> int:
-    """Number of image files directly inside folder (0 if it does not exist)."""
+def _image_names(folder: Path) -> list[str]:
+    """Sorted names of the image files directly inside folder ([] if it does not exist)."""
     try:
         with os.scandir(folder) as entries:
-            return sum(1 for entry in entries if _is_image_name(entry.name) and entry.is_file())
+            return sorted(e.name for e in entries if _is_image_name(e.name) and e.is_file())
     except (FileNotFoundError, NotADirectoryError):
-        return 0
+        return []
+
+
+def _count_images(folder: Path) -> int:
+    """Number of image files directly inside folder (0 if it does not exist)."""
+    return len(_image_names(folder))
 
 
 def _split_counts(folder: Path, splits: Iterable[str]) -> dict[str, int]:
@@ -529,6 +604,48 @@ def _mismatch(what: str, expected: str, actual: str) -> str:
     return f"sha256 mismatch for {what} (expected {expected[:16]}..., got {actual[:16]}...)"
 
 
+def _some(items: Sequence[str], limit: int = 5) -> str:
+    """Comma-separated items, cut after ``limit`` with "... (+N more)", for long lists."""
+    shown = ", ".join(items[:limit])
+    return f"{shown}, ... (+{len(items) - limit} more)" if len(items) > limit else shown
+
+
+def _set14_canonical(file_name: str) -> str | None:
+    """Canonical Set14 name ("baboon" ... "zebra") of an image file name, or None if unknown.
+
+    Accepts the canonical names in any case ("Baboon.PNG"), with a suffix such as "_HR" or
+    "-GT", the spellings "lena" and "peppers", and the numbered names of SelfExSR-style copies
+    ("img_001_SRF_2_HR.png" is baboon ... "img_014_SRF_2_HR.png" is zebra).
+    """
+    stem = os.path.splitext(file_name)[0].lower()
+    numbered = re.fullmatch(r"img_?0*(\d{1,2})(?:[_-].*)?", stem)
+    if numbered:
+        number = int(numbered.group(1))
+        return _SET14_NAMES[number - 1] if 1 <= number <= len(_SET14_NAMES) else None
+    stem = re.sub(r"[_-](?:hr|gt|original)$", "", stem)
+    stem = _SET14_ALIASES.get(stem, stem)
+    return stem if stem in _SET14_NAMES else None
+
+
+def _set14_split(canonical: str) -> str:
+    """The SET14 split of a canonical image name: comic, monarch and zebra are the test set."""
+    return "test" if canonical in _SET14_TEST else "train"
+
+
+def _layout_path(name: str, rel: str) -> str:
+    """Where a manifest path ("<split>/<file>") lives in this script's layout.
+
+    SET14 images are sorted into train/ and test/ by image, whatever split the manifest key
+    names: its keys predate the 11/3 split and are all "test/<name>.png".
+    """
+    if name == "SET14":
+        file_name = rel.rpartition("/")[2]
+        canonical = _set14_canonical(file_name)
+        if canonical:
+            return f"{_set14_split(canonical)}/{file_name}"
+    return rel
+
+
 def _sha256_file(path: Path) -> str:
     """SHA-256 of a file, read in chunks."""
     digest = hashlib.sha256()
@@ -538,8 +655,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _rmtree(path: Path) -> None:
-    """Delete a folder tree (best effort), making read-only files writable first (Windows)."""
+def _rmtree(path: Path, *, quiet: bool = False) -> bool:
+    """Delete a folder tree (best effort), making read-only files writable first (Windows).
+
+    Returns False (after a warning unless quiet) when something could not be deleted.
+    """
 
     def make_writable_and_retry(
         function: Callable[[str], object], target: str, _error: object
@@ -548,14 +668,17 @@ def _rmtree(path: Path) -> None:
         function(target)
 
     if not os.path.lexists(path):
-        return
+        return True
     try:
         if sys.version_info >= (3, 12):
             shutil.rmtree(path, onexc=make_writable_and_retry)
         else:
             shutil.rmtree(path, onerror=make_writable_and_retry)
     except OSError as exc:
-        _warn(f"could not remove the temporary folder {path}: {exc}")
+        if not quiet:
+            _warn(f"could not remove the temporary folder {path}: {exc}")
+        return False
+    return True
 
 
 def _remove_if_empty(folder: Path) -> None:
@@ -589,8 +712,9 @@ def _load_manifest() -> dict[str, Any] | None:
 def _manifest_files(name: str) -> dict[str, tuple[str, str | None]] | None:
     """Manifest entries of a dataset as {"split/file": (sha256, mirror file name or None)}.
 
-    Returns None when the manifest is missing or has no files for this dataset. Entries that
-    are not images of an expected split (such as the BSDS ``iids_*.txt`` lists) are ignored.
+    The keys are paths in this script's layout (see _layout_path). Returns None when the
+    manifest is missing or has no files for this dataset. Entries that are not images of an
+    expected split (such as the BSDS ``iids_*.txt`` lists) are ignored.
     """
     manifest = _load_manifest()
     section = manifest.get(name) if manifest else None
@@ -599,7 +723,10 @@ def _manifest_files(name: str) -> dict[str, tuple[str, str | None]] | None:
         return None
     entries: dict[str, tuple[str, str | None]] = {}
     for rel, value in files.items():
-        if not (_SAFE_RELATIVE.fullmatch(rel) and rel.split("/")[0] in EXPECTED_COUNTS[name]):
+        if not _SAFE_RELATIVE.fullmatch(rel):
+            continue
+        path = _layout_path(name, rel)
+        if path.split("/")[0] not in EXPECTED_COUNTS[name]:
             continue
         if isinstance(value, dict):  # {"source": "<file on the mirror>", "sha256": "..."}
             sha256, source = value.get("sha256"), value.get("source")
@@ -609,25 +736,73 @@ def _manifest_files(name: str) -> dict[str, tuple[str, str | None]] | None:
         if not (isinstance(sha256, str) and _SHA256_HEX.fullmatch(sha256) and valid_source):
             _warn(f"ignoring the malformed {MANIFEST_PATH.name} entry {name}: {rel}")
             continue
-        entries[rel] = (sha256.lower(), source)
+        entries[path] = (sha256.lower(), source)
     return entries or None
 
 
-def _compare_with_manifest(name: str, folder: Path) -> tuple[int, dict[str, str]]:
-    """Hash the files in folder that have a manifest entry.
+@dataclass
+class _ManifestCheck:
+    """A dataset folder compared with the dataset's entries in dataset_manifest.json."""
 
-    Returns the number of files checked and {"split/file": actual sha256} for those that differ.
-    Manifest entries without a file on disk are skipped (the image counts cover completeness).
+    total: int  # number of manifest entries
+    mismatched: dict[str, str] = field(default_factory=dict)  # "split/file" -> sha256 on disk
+    missing: list[str] = field(default_factory=list)  # listed files that are not on disk
+    unlisted: dict[str, str] = field(default_factory=dict)  # images on disk without an entry
+
+    @property
+    def checked(self) -> int:
+        """Listed files that are on disk (each was hashed)."""
+        return self.total - len(self.missing)
+
+    @property
+    def matched(self) -> int:
+        """Listed files that are on disk with the listed sha256."""
+        return self.checked - len(self.mismatched)
+
+    def deviations(self) -> dict[str, str | None]:
+        """Every difference: "split/file" -> sha256 on disk, or None for a missing file."""
+        found: dict[str, str | None] = {**self.mismatched, **self.unlisted}
+        found.update(dict.fromkeys(self.missing))
+        return dict(sorted(found.items()))
+
+    def describe(self) -> str:
+        """Short summary of the differences, e.g. "3 of 300 listed files missing"."""
+        parts = []
+        if self.mismatched:
+            parts.append(f"{len(self.mismatched)} of {self.checked} with a different sha256")
+        if self.missing:
+            parts.append(f"{len(self.missing)} of {self.total} listed files missing")
+        if self.unlisted:
+            parts.append(f"{len(self.unlisted)} images not listed")
+        return ", ".join(parts) or "no differences"
+
+
+def _compare_with_manifest(spec: _DatasetSpec, folder: Path) -> _ManifestCheck | None:
+    """Compare a dataset folder with its manifest entries (None: the manifest has none).
+
+    Every listed file is hashed. A listed file that is not on disk counts as missing, and an
+    image in a split folder that has no entry counts as unlisted (names compared ignoring case,
+    as on Windows and macOS file systems).
     """
-    checked, deviations = 0, {}
-    for rel, (expected, _source) in sorted((_manifest_files(name) or {}).items()):
+    entries = _manifest_files(spec.name)
+    if not entries:
+        return None
+    check = _ManifestCheck(total=len(entries))
+    for rel, (expected, _source) in sorted(entries.items()):
         path = folder / rel
-        if path.is_file():
-            checked += 1
-            actual = _sha256_file(path)
-            if actual != expected:
-                deviations[rel] = actual
-    return checked, deviations
+        if not path.is_file():
+            check.missing.append(rel)
+            continue
+        actual = _sha256_file(path)
+        if actual != expected:
+            check.mismatched[rel] = actual
+    listed = {rel.lower() for rel in entries}
+    for split in spec.splits:
+        for file_name in _image_names(folder / split):
+            rel = f"{split}/{file_name}"
+            if rel.lower() not in listed:
+                check.unlisted[rel] = _sha256_file(folder / rel)
+    return check
 
 
 def _read_provenance(root: Path) -> dict[str, Any]:
@@ -643,13 +818,20 @@ def _read_provenance(root: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _known_deviations(root: Path, name: str) -> dict[str, str]:
-    """Manifest deviations accepted at download time (recorded in PROVENANCE.json)."""
+def _known_deviations(root: Path, name: str) -> dict[str, str | None]:
+    """Manifest deviations accepted at download time (recorded in PROVENANCE.json).
+
+    "split/file" -> sha256 the file had, or None for a listed file the download did not have.
+    """
     entry = _read_provenance(root).get(name)
     deviations = entry.get("manifest_deviations") if isinstance(entry, dict) else None
     if not isinstance(deviations, dict):
         return {}
-    return {k: v for k, v in deviations.items() if isinstance(k, str) and isinstance(v, str)}
+    return {
+        k: v
+        for k, v in deviations.items()
+        if isinstance(k, str) and (v is None or isinstance(v, str))
+    }
 
 
 def _dataset_order(name: str) -> int:
@@ -736,10 +918,21 @@ def _explain_error(exc: BaseException, url: str, timeout: float) -> tuple[str, b
     return f"{type(cause).__name__}: {cause}", False
 
 
-def _download_once(url: str, dest: Path, ctx: _Context, progress_label: str | None) -> _Download:
-    """Stream url into a temporary file in <root>/.downloads/, then os.replace it to dest."""
-    ctx.downloads.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(prefix="download-", suffix=".part", dir=ctx.downloads)
+def _download_once(
+    url: str,
+    dest: Path,
+    ctx: _Context,
+    progress_label: str | None,
+    cancel: threading.Event | None,
+) -> _Download:
+    """Stream url into a temporary file next to dest, then os.replace it to dest.
+
+    dest is always inside the attempt's work folder in <root>/.downloads/, so the temporary
+    file is too, and it disappears with that folder whatever happens. The request fails when
+    connecting or a read takes longer than ctx.timeout, and when less than STALL_BYTES arrive
+    within ctx.timeout (a stalled or trickling transfer). A set ``cancel`` stops it.
+    """
+    fd, tmp_name = tempfile.mkstemp(prefix=".download-", suffix=".part", dir=dest.parent)
     tmp = Path(tmp_name)
     digest, size, started = hashlib.sha256(), 0, time.monotonic()
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
@@ -752,17 +945,32 @@ def _download_once(url: str, dest: Path, ctx: _Context, progress_label: str | No
                 raise _SourceError("got an HTML page instead of the file (login or error page?)")
             length = response.headers.get("Content-Length")
             total = int(length) if length and length.isdigit() else None
-            while chunk := response.read(CHUNK_SIZE):
+            read = getattr(response, "read1", response.read)  # read1: returns once data arrives
+            mark_time, mark_size = time.monotonic(), 0  # last time STALL_BYTES had arrived
+            if progress_label:
+                ctx.report.start_progress()
+            while chunk := read(CHUNK_SIZE):
+                if cancel is not None and cancel.is_set():
+                    raise _Cancelled()
                 out.write(chunk)
                 digest.update(chunk)
                 size += len(chunk)
+                now = time.monotonic()
+                if size - mark_size >= STALL_BYTES:
+                    mark_time, mark_size = now, size
+                elif now - mark_time > ctx.timeout:
+                    raise _SourceError(
+                        f"stalled: less than {_size(STALL_BYTES)} received in {ctx.timeout:g}s",
+                        retryable=True,
+                    )
                 if progress_label:
                     shown = (
                         f"{_size(size)} / {_size(total)} ({100 * size // total}%)"
                         if total
                         else _size(size)
                     )
-                    ctx.report.progress(f"        {progress_label}: {shown}")
+                    fraction = size / total if total else None
+                    ctx.report.progress(f"        {progress_label}: {shown}", fraction)
         if total is not None and size != total:
             raise _SourceError(
                 f"connection closed early ({_size(size)} of {_size(total)})", retryable=True
@@ -778,14 +986,25 @@ def _download_once(url: str, dest: Path, ctx: _Context, progress_label: str | No
     return _Download(size, digest.hexdigest())
 
 
-def _download(url: str, dest: Path, ctx: _Context, progress_label: str | None = None) -> _Download:
+def _download(
+    url: str,
+    dest: Path,
+    ctx: _Context,
+    progress_label: str | None = None,
+    cancel: threading.Event | None = None,
+) -> _Download:
     """Download url to dest, retrying transient failures with exponential backoff.
 
-    Raises _SourceError with a one-line reason when the URL cannot be fetched.
+    Raises _SourceError with a one-line reason when the URL cannot be fetched, and _Cancelled
+    as soon as ``cancel`` is set: no new attempt or backoff wait starts after that.
     """
     for attempt in range(1, HTTP_ATTEMPTS + 1):
+        if cancel is not None and cancel.is_set():
+            raise _Cancelled()
         try:
-            return _download_once(url, dest, ctx, progress_label)
+            return _download_once(url, dest, ctx, progress_label, cancel)
+        except _Cancelled:
+            raise
         except Exception as exc:  # classified below; KeyboardInterrupt is not caught
             if isinstance(exc, urllib.error.HTTPError):
                 exc.close()  # an error response still holds its connection
@@ -794,40 +1013,83 @@ def _download(url: str, dest: Path, ctx: _Context, progress_label: str | None = 
                 raise _SourceError(
                     reason + (f" (after {attempt} attempts)" if attempt > 1 else "")
                 ) from exc
+            if cancel is not None and cancel.is_set():
+                raise _Cancelled() from exc
             delay = RETRY_BACKOFF[attempt - 1]
             ctx.report.info(
                 f"        {reason}; attempt {attempt + 1}/{HTTP_ATTEMPTS} in {delay:g}s: {url}"
             )
-            time.sleep(delay)
+            if cancel is None:
+                time.sleep(delay)
+            elif cancel.wait(delay):
+                raise _Cancelled() from exc
     raise AssertionError("unreachable")
 
 
 def _download_files(files: Sequence[_MirrorFile], stage: Path, ctx: _Context) -> None:
-    """Fetch mirror files in parallel into stage, verifying each checksum (mismatch = failure)."""
+    """Fetch mirror files in parallel into stage, verifying each checksum (mismatch = failure).
+
+    The download threads are daemon threads. When a file fails, or on Ctrl-C (or a Jupyter
+    kernel interrupt), the other threads stop at their next step - no new request, retry or
+    backoff wait starts - and this function raises after at most WORKER_GRACE seconds, even
+    when a request is stuck in the network. Its temporary file is inside the work folder, which
+    the caller deletes.
+    """
+    cancel = threading.Event()
+    pending: queue.SimpleQueue[_MirrorFile] = queue.SimpleQueue()
+    results: queue.SimpleQueue[tuple[int, BaseException | None]] = queue.SimpleQueue()
+    for item in files:
+        pending.put(item)
 
     def fetch_one(item: _MirrorFile) -> int:
-        dest = stage / item.dest
-        dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            result = _download(item.url, dest, ctx)
+            result = _download(item.url, stage / item.dest, ctx, cancel=cancel)
         except _SourceError as exc:
             raise _SourceError(f"{item.dest}: {exc}") from exc
         if item.sha256 and result.sha256 != item.sha256:
             raise _SourceError(_mismatch(item.dest, item.sha256, result.sha256))
         return result.size
 
+    def worker() -> None:
+        while not cancel.is_set():
+            try:
+                item = pending.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                results.put((fetch_one(item), None))
+            except BaseException as exc:  # handed over to the main thread
+                results.put((0, exc))
+                return
+
+    workers = [
+        threading.Thread(target=worker, name=f"mirror-download-{number}", daemon=True)
+        for number in range(min(MIRROR_WORKERS, len(files)))
+    ]
     started, done, total = time.monotonic(), 0, 0
-    with ThreadPoolExecutor(max_workers=MIRROR_WORKERS) as pool:
-        futures = [pool.submit(fetch_one, item) for item in files]
-        try:
-            for future in as_completed(futures):
-                total += future.result()
-                done += 1
-                ctx.report.progress(f"        {done}/{len(files)} files, {_size(total)}")
-        except BaseException:
-            for future in futures:  # stop queued downloads; running ones finish before cleanup
-                future.cancel()
-            raise
+    ctx.report.start_progress()
+    try:
+        for thread in workers:
+            thread.start()
+        while done < len(files):
+            try:  # a timeout keeps Ctrl-C working on Windows, where a plain get() blocks it
+                size, error = results.get(timeout=0.25)
+            except queue.Empty:
+                if results.empty() and not any(thread.is_alive() for thread in workers):
+                    raise _SourceError("the download threads stopped unexpectedly") from None
+                continue
+            if error is not None:
+                raise error
+            total += size
+            done += 1
+            fraction = done / len(files)
+            ctx.report.progress(f"        {done}/{len(files)} files, {_size(total)}", fraction)
+    finally:
+        cancel.set()
+        deadline = time.monotonic() + WORKER_GRACE
+        for thread in workers:
+            if thread.ident is not None:  # started
+                thread.join(max(0.0, deadline - time.monotonic()))
     ctx.report.info(f"        {done} files, {_size(total)} in {time.monotonic() - started:.1f}s")
 
 
@@ -918,10 +1180,21 @@ def _layout_bsds(extracted: Path, _split: str) -> Iterator[tuple[str, Path, str]
             yield path.parent.name, path, path.name
 
 
-def _layout_flat(extracted: Path, split: str) -> Iterator[tuple[str, Path, str]]:
-    """Unknown inner layout (Set14 tarball): every image goes to split under its base name."""
+def _layout_set14(extracted: Path, _split: str) -> Iterator[tuple[str, Path, str]]:
+    """Set14 tarball (unknown inner layout): every image, under its canonical name.
+
+    Each image goes to train/ or test/ (comic, monarch, zebra) by its name, e.g.
+    ``Set14/HR/Zebra.PNG`` becomes ``test/zebra.png``. An image whose name is not one of the
+    14 Set14 images fails the source, since its split cannot be known.
+    """
     for path in _image_files(extracted):
-        yield split, path, path.name
+        canonical = _set14_canonical(path.name)
+        if canonical is None:
+            raise _SourceError(
+                f"unknown image {path.name!r} in the archive: expected the 14 Set14 images "
+                "(baboon.png ... zebra.png or img_001 ... img_014)"
+            )
+        yield _set14_split(canonical), path, canonical + path.suffix.lower()
 
 
 def _layout_icdar(extracted: Path, split: str) -> Iterator[tuple[str, Path, str]]:
@@ -978,7 +1251,10 @@ def _bsd300_mirror_files(ctx: _Context, base: str, work: Path) -> list[_MirrorFi
 
 
 def _set14_mirror_files(_ctx: _Context, base: str, _work: Path) -> list[_MirrorFile]:
-    """Set14 files on the mirror, saved under canonical names (manifest, else built-in list)."""
+    """Set14 files on the mirror, saved under canonical names in train/ or test/.
+
+    Names and hashes come from the manifest, else from the built-in list (img_001 = baboon ...).
+    """
     entries = _manifest_files("SET14")
     if entries and all(source for _, source in entries.values()):
         return [
@@ -986,7 +1262,9 @@ def _set14_mirror_files(_ctx: _Context, base: str, _work: Path) -> list[_MirrorF
             for rel, (sha, source) in sorted(entries.items())
         ]
     return [
-        _MirrorFile(f"test/{name}.png", f"{base}/img_{number:03d}_SRF_2_HR.png", None)
+        _MirrorFile(
+            f"{_set14_split(name)}/{name}.png", f"{base}/img_{number:03d}_SRF_2_HR.png", None
+        )
         for number, name in enumerate(_SET14_NAMES, 1)
     ]
 
@@ -1045,11 +1323,14 @@ _SPECS: dict[str, _DatasetSpec] = {
             _ArchiveSource(
                 "huggingface",
                 "Hugging Face eugenesiow/Set14 (Set14_HR.tar.gz)",
-                (_Archive("set14-hf", _SET14_TARBALL, "Set14_HR.tar.gz", split="test"),),
-                _layout_flat,
+                (_Archive("set14-hf", _SET14_TARBALL, "Set14_HR.tar.gz"),),
+                _layout_set14,
             ),
         ),
-        unpack_hint="(Or unpack the 14 images it contains into {root}/SET14/test/.)",
+        unpack_hint=(
+            "(Or unpack the 14 images it contains yourself: comic, monarch and zebra into "
+            "{root}/SET14/test/, the other 11 into {root}/SET14/train/.)"
+        ),
     ),
     "ICDAR2003": _DatasetSpec(
         name="ICDAR2003",
@@ -1190,32 +1471,193 @@ def _plan_sources(spec: _DatasetSpec, downloads: Path) -> list[_Source]:
     return sources
 
 
+# ------------------------------------------------------------------- temporary folders and locks
+
+
+def _try_lock(fd: int) -> bool | None:
+    """Try to lock an open file exclusively, without waiting.
+
+    True: locked; the lock ends when fd is closed or the process dies (even by SIGKILL).
+    False: another process holds it. None: this file system cannot lock files.
+    """
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:  # POSIX: locked by another process
+        return False
+    except OSError as exc:
+        if sys.platform == "win32" and exc.errno in (errno.EACCES, errno.EDEADLK):
+            return False  # msvcrt: the byte is locked by another process
+        return None
+    return True
+
+
+def _lock_is_free(path: Path) -> bool:
+    """True when no running process holds the lock file at path (its run ended or died)."""
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except FileNotFoundError:
+        return True
+    except OSError:  # cannot tell, e.g. no permission: treat it as in use
+        return False
+    try:
+        return _try_lock(fd) is True  # None (no locking support): treat it as in use
+    finally:
+        os.close(fd)  # gives the lock back at once
+
+
+@contextlib.contextmanager
+def _work_folder(downloads: Path, name: str) -> Iterator[Path]:
+    """A new work folder ``<downloads>/<name>-<random>.tmp`` for one attempt, deleted after it.
+
+    The lock file ``<name>-<random>.lock`` next to it stays locked while the folder is in use,
+    so the clean-up in another run (_remove_stale_temporaries) never deletes it too early.
+    """
+    downloads.mkdir(parents=True, exist_ok=True)
+    fd, lock_name = tempfile.mkstemp(prefix=f"{name}-", suffix=".lock", dir=downloads)
+    lock = Path(lock_name)
+    work = lock.with_suffix(".tmp")
+    try:
+        _try_lock(fd)
+        if os.path.lexists(work):  # an orphan with the same name but no lock file: stale
+            _rmtree(work, quiet=True)
+        work.mkdir()
+        yield work
+    finally:
+        _rmtree(work)
+        os.close(fd)
+        with contextlib.suppress(OSError):
+            lock.unlink()
+
+
+def _remove_stale_temporaries(downloads: Path, report: _Reporter) -> None:
+    """Delete what killed runs (e.g. a kernel restart) left in ``<root>/.downloads/``.
+
+    That is: work folders whose lock is no longer held, lock files without a folder, and the
+    ``download-*.part`` files of older versions. Work folders of runs still in progress are
+    kept, and drop-in archives or anything else in the folder are never touched.
+    """
+    try:
+        with os.scandir(downloads) as scan:
+            entries = {entry.name: entry.is_dir(follow_symlinks=False) for entry in scan}
+    except OSError:  # no .downloads folder (the usual case) or unreadable
+        return
+    removed = 0
+    for name, is_dir in sorted(entries.items()):
+        if not _TEMPORARY_NAME.fullmatch(name):
+            continue
+        path = downloads / name
+        stem, _, kind = name.rpartition(".")
+        if kind == "tmp" and is_dir:
+            lock = downloads / f"{stem}.lock"
+            if lock.name in entries and not _lock_is_free(lock):
+                continue  # in use by a running download
+            if _rmtree(path, quiet=True):
+                removed += 1
+            with contextlib.suppress(OSError):
+                lock.unlink()
+        elif kind == "lock" and not is_dir and f"{stem}.tmp" not in entries:
+            # A lock file is created a moment before it is locked and before its folder exists:
+            # only lock files older than a minute can be orphans.
+            with contextlib.suppress(OSError):
+                if time.time() - path.stat().st_mtime > 60 and _lock_is_free(path):
+                    path.unlink()
+        elif kind == "part" and not is_dir:
+            with contextlib.suppress(OSError):
+                path.unlink()
+                removed += 1
+    if removed:
+        report.info(f"removed {removed} leftover(s) of an interrupted earlier run from {downloads}")
+
+
 # -------------------------------------------------------------------------- downloading a dataset
 
 
-def _install(stage: Path, dest: Path, work: Path) -> None:
-    """Move the verified staging folder to dest; an existing dest is replaced only now."""
-    previous = work / "previous"
-    if os.path.lexists(dest):
-        os.replace(dest, previous)  # dropped together with the work folder
+def _move_aside(target: Path, into: Path, beside: Path) -> Path:
+    """Rename target to ``into``, or to ``beside`` (next to target) across drives; new place."""
     try:
-        os.replace(stage, dest)
-    except OSError:
-        if os.path.lexists(previous):
-            os.replace(previous, dest)
+        os.replace(target, into)
+        return into
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+    os.replace(target, beside)
+    return beside
+
+
+def _move_in(source: Path, target: Path, beside: Path) -> None:
+    """Rename source to target; across drives copy it to ``beside`` first, then rename."""
+    try:
+        os.replace(source, target)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+    try:
+        shutil.copytree(source, beside, symlinks=True)
+        os.replace(beside, target)
+    except BaseException:
+        _rmtree(beside, quiet=True)
         raise
+
+
+def _install(stage: Path, dest: Path, work: Path, splits: Iterable[str]) -> None:
+    """Move the verified split folders from stage into dest; on failure undo everything.
+
+    Only the split folders are replaced: any other file or folder in dest is kept. An old split
+    folder is moved aside (into the work folder) before its new copy moves in, and deleted only
+    after all of them are in place. A dest that is a link to a folder elsewhere is replaced by
+    a real folder; the folder it points to is never modified.
+    """
+    tag = work.name.removesuffix(".tmp")  # unique per attempt
+    if os.path.islink(dest) or not os.path.lexists(dest):
+        moves = [(stage, dest)]
+    else:
+        moves = [(stage / split, dest / split) for split in splits]
+    (work / "previous").mkdir(exist_ok=True)
+    moved_aside: list[tuple[Path, Path]] = []  # (where an old copy is now, where it was)
+    moved_in: list[Path] = []
+    try:
+        for new, target in moves:
+            if os.path.lexists(target):
+                beside = target.with_name(f".{target.name}.old-{tag}")
+                moved_aside.append(
+                    (_move_aside(target, work / "previous" / target.name, beside), target)
+                )
+            _move_in(new, target, target.with_name(f".{target.name}.new-{tag}"))
+            moved_in.append(target)
+    except BaseException:
+        for target in reversed(moved_in):
+            _rmtree(target, quiet=True)
+        for aside, target in reversed(moved_aside):
+            try:
+                os.replace(aside, target)
+            except OSError as exc:
+                _warn(f"could not move {aside} back to {target}: {exc}")
+        raise
+    for aside, _target in moved_aside:
+        if not aside.is_relative_to(work):  # was moved beside its original place
+            if os.path.islink(aside):
+                os.unlink(aside)
+            else:
+                _rmtree(aside)
 
 
 def _attempt(
     spec: _DatasetSpec, source: _Source, ctx: _Context, dest: Path
 ) -> tuple[_Fetched, dict[str, int]]:
-    """Run one source in a fresh temporary folder and install the result if it is complete.
+    """Run one source in a fresh work folder and install the result if it is complete.
 
-    The temporary folder (downloads, extracted files, staged images) is always deleted.
+    The work folder (downloads, extracted files, staged images, replaced split folders) is
+    always deleted.
     """
-    ctx.downloads.mkdir(parents=True, exist_ok=True)
-    work = Path(tempfile.mkdtemp(prefix=f"{spec.name}-", suffix=".tmp", dir=ctx.downloads))
-    try:
+    with _work_folder(ctx.downloads, spec.name) as work:
         stage = work / "stage"
         for split in spec.splits:
             (stage / split).mkdir(parents=True)
@@ -1224,10 +1666,8 @@ def _attempt(
         problem = _count_problem(spec, counts)
         if problem:
             raise _SourceError(problem)
-        _install(stage, dest, work)
+        _install(stage, dest, work, spec.splits)
         return fetched, counts
-    finally:
-        _rmtree(work)
 
 
 def _process_dataset(spec: _DatasetSpec, ctx: _Context, force: bool) -> _Result:
@@ -1238,8 +1678,12 @@ def _process_dataset(spec: _DatasetSpec, ctx: _Context, force: bool) -> _Result:
         ctx.report.info(f"{spec.name}: already complete ({_format_counts(counts)}) in {dest}")
         return _Result(spec.name, True, "already complete", dest, counts, "-")
 
+    if os.path.lexists(dest) and not os.path.islink(dest) and not dest.is_dir():
+        reason = f"{dest} exists but is not a folder; move it out of the way and run again"
+        ctx.report.warn(f"{spec.name}: {reason}")
+        return _Result(spec.name, False, "FAILED", dest, source="-", errors=[f"local: {reason}"])
     if force and os.path.lexists(dest):
-        state = "re-downloading (--force; the current folder is kept until the new copy is ready)"
+        state = "re-downloading (--force; the current files are kept until the new copy is ready)"
     elif any(counts.values()):
         state = f"incomplete ({_format_counts(counts)}), downloading"
     else:
@@ -1305,13 +1749,26 @@ def _counts_complete(spec: _DatasetSpec, counts: dict[str, int], report: _Report
     return True
 
 
+def _check_timeout(timeout: float) -> float:
+    """The timeout as a float; ValueError unless it is above 0 and at most MAX_TIMEOUT."""
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError):
+        raise ValueError(f"timeout must be a number of seconds, got {timeout!r}") from None
+    if not 0 < value <= MAX_TIMEOUT:  # also rejects NaN and infinity
+        raise ValueError(
+            f"timeout must be above 0 and at most {MAX_TIMEOUT:g} seconds (one day), "
+            f"got {timeout!r}"
+        )
+    return value
+
+
 def _download_datasets(
     names: Sequence[str], root: Path, force: bool, timeout: float, quiet: bool
 ) -> list[_Result]:
     """Process every dataset in turn; a failure does not stop the others."""
-    if not (timeout > 0 and math.isfinite(timeout)):
-        raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
-    ctx = _Context(root, float(timeout), _Reporter(quiet))
+    ctx = _Context(root, _check_timeout(timeout), _Reporter(quiet))
+    _remove_stale_temporaries(ctx.downloads, ctx.report)
     try:
         return [_process_dataset(_SPECS[name], ctx, force) for name in names]
     finally:
@@ -1346,7 +1803,12 @@ def _unavailable_message(failed: Sequence[_Result], root: Path) -> str:
 
 
 def _verify(spec: _DatasetSpec, root: Path, report: _Reporter) -> _Result:
-    """Recount a dataset and re-hash every file that has a manifest entry."""
+    """Recount a dataset and check it against its manifest entries.
+
+    Every listed file must be on disk with the listed sha256, and every image must be listed,
+    except for the differences accepted when an official archive was downloaded (recorded in
+    PROVENANCE.json, see _ArchiveSource.fetch).
+    """
     folder = root / spec.name
     entry = _read_provenance(root).get(spec.name)
     source = str(entry.get("source", "-")) if isinstance(entry, dict) else "-"
@@ -1359,18 +1821,41 @@ def _verify(spec: _DatasetSpec, root: Path, report: _Reporter) -> _Result:
     if not _counts_complete(spec, counts, report):
         problems.append(_count_problem(spec, counts) or "incomplete")
     manifest = _manifest_files(spec.name)
-    if manifest:
-        checked, deviations = _compare_with_manifest(spec.name, folder)
+    check = _compare_with_manifest(spec, folder) if manifest else None
+    if manifest and check:
         known = _known_deviations(root, spec.name)
-        accepted = sum(1 for rel, sha in deviations.items() if known.get(rel) == sha)
-        for rel, actual in sorted(deviations.items()):
-            if rel not in known:
-                problems.append(_mismatch(rel, manifest[rel][0], actual))
-            elif known[rel] != actual:  # an accepted deviation that has changed since download
-                problems.append(
-                    _mismatch(rel, known[rel], actual) + "; expected = hash in PROVENANCE.json"
+        accepted = 0
+        mismatches = []
+        for rel, actual in sorted(check.mismatched.items()):
+            recorded = known.get(rel)
+            if recorded == actual:
+                accepted += 1
+            elif recorded is None:
+                mismatches.append(_mismatch(rel, manifest[rel][0], actual))
+            else:  # an accepted deviation that has changed since the download
+                mismatches.append(
+                    _mismatch(rel, recorded, actual) + "; expected = hash in PROVENANCE.json"
                 )
-        hashes = f"sha256 of {checked} files checked against dataset_manifest.json"
+        missing = [rel for rel in check.missing if not (rel in known and known[rel] is None)]
+        accepted += len(check.missing) - len(missing)
+        unlisted = [rel for rel, sha in sorted(check.unlisted.items()) if known.get(rel) != sha]
+        accepted += len(check.unlisted) - len(unlisted)
+        problems += mismatches[:10]
+        if len(mismatches) > 10:
+            problems.append(f"... and {len(mismatches) - 10} more sha256 mismatches")
+        if missing:
+            problems.append(
+                f"{len(missing)} of the {check.total} files listed in dataset_manifest.json "
+                f"are missing: {_some(missing)}"
+            )
+        if unlisted:
+            problems.append(
+                f"{len(unlisted)} images are not listed in dataset_manifest.json: {_some(unlisted)}"
+            )
+        hashes = (
+            f"sha256 of {check.checked}/{check.total} listed files checked against "
+            "dataset_manifest.json"
+        )
         if accepted:
             hashes += f" ({accepted} known deviations recorded at download time accepted)"
     elif _load_manifest() is None:
@@ -1427,11 +1912,15 @@ def ensure_datasets(
     Names are case-insensitive ("all" selects every dataset). ``root`` defaults to
     ``default_root()``; relative paths are taken from the current directory. Complete datasets
     are skipped without network access unless ``force`` is true, which downloads a fresh copy
-    and replaces the old folder only after success. ``timeout`` is the per-request network
-    timeout in seconds. ``quiet`` hides progress output (warnings are still printed).
+    and replaces the old split folders only after success (other files in a dataset folder are
+    kept). ``timeout`` (seconds, above 0 and at most one day) applies to connecting and to each
+    wait for data; a download that gets less than 1 kB in that time fails as well. It does not
+    limit the total time of a download. ``quiet`` hides progress output (warnings are still
+    printed).
 
     Raises DatasetUnavailableError after processing the other datasets if every source failed
-    for some dataset. The error message explains the manual download.
+    for some dataset. The error message explains the manual download. Raises ValueError for an
+    unknown dataset name or an invalid timeout.
     """
     root_path = _resolve_root(root)
     results = _download_datasets(_canonical_names(names), root_path, force, timeout, quiet)
@@ -1447,9 +1936,11 @@ def ensure_datasets(
 def verify(name: str, root: str | os.PathLike[str] | None = None) -> bool:
     """Recount a dataset and re-hash its files against the manifest where an entry exists.
 
-    Manifest deviations that were accepted at download time (official archives whose bytes
-    may differ from the mirror; recorded in PROVENANCE.json) do not count as failures.
-    Prints one line per problem and returns True when everything checks out.
+    Where the manifest lists the dataset's files, each listed file must be present with its
+    sha256 and each image must be listed. Differences that were accepted at download time
+    (official archives whose bytes or names may differ from the mirror; recorded in
+    PROVENANCE.json) do not count as failures. Prints one line per problem and returns True
+    when everything checks out.
     """
     return _verify(_spec(name), _resolve_root(root), _Reporter()).ok
 
@@ -1458,12 +1949,15 @@ def verify(name: str, root: str | os.PathLike[str] | None = None) -> bool:
 
 
 def _positive_float(text: str) -> float:
+    """argparse type of --timeout: seconds, above 0 and at most MAX_TIMEOUT."""
     try:
         value = float(text)
     except ValueError:
         raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
-    if not (value > 0 and math.isfinite(value)):
-        raise argparse.ArgumentTypeError("must be a positive number of seconds")
+    if not 0 < value <= MAX_TIMEOUT:  # also rejects NaN and infinity
+        raise argparse.ArgumentTypeError(
+            f"must be a number of seconds above 0 and at most {MAX_TIMEOUT:g} (one day)"
+        )
     return value
 
 
@@ -1484,7 +1978,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="download again even if complete; the old folder is replaced only after success",
+        help="download again even if complete; the old files are replaced only after success",
     )
     parser.add_argument(
         "--verify-only", action="store_true", help="recount and re-hash the files; no downloads"
@@ -1497,7 +1991,9 @@ def _build_parser() -> argparse.ArgumentParser:
         type=_positive_float,
         default=30.0,
         metavar="SEC",
-        help="network timeout per request in seconds (default: 30)",
+        help="network timeout in seconds for connecting and for each wait for data; a download "
+        "that gets less than 1 kB in SEC seconds also fails. Not a limit on the total download "
+        f"time (default: 30, at most {MAX_TIMEOUT:g})",
     )
     # For testing only: SLOT=URL[#sha256=HEX], see the module docstring.
     parser.add_argument("--source-override", action="append", default=[], help=argparse.SUPPRESS)
@@ -1511,13 +2007,13 @@ def _print_sources(names: Sequence[str], root: Path) -> None:
         spec = _SPECS[name]
         sources = [_with_overrides(source) for source in spec.sources]
         drop_ins = next(s for s in sources if isinstance(s, _ArchiveSource)).archives
-        print(f"{name} (expected {_format_counts(spec.splits)})")
+        _print(f"{name} (expected {_format_counts(spec.splits)})")
         paths = " + ".join(str(downloads / a.filename) for a in drop_ins)
-        print(f"  0. drop-in archive, used first when present: {paths}")
+        _print(f"  0. drop-in archive, used first when present: {paths}")
         for number, source in enumerate(sources, 1):
-            print(f"  {number}. {source.label}")
+            _print(f"  {number}. {source.label}")
             for slot, url, check in source.slots():
-                print(f"       {slot:<22} {url}\n       {'':<22} {check}")
+                _print(f"       {slot:<22} {url}\n       {'':<22} {check}")
 
 
 def _print_summary(results: Sequence[_Result], root: Path) -> None:
@@ -1525,16 +2021,15 @@ def _print_summary(results: Sequence[_Result], root: Path) -> None:
     rows = [("dataset", "status", "images", "source")]
     rows += [(r.name, r.status, _format_counts(r.counts) or "-", r.source or "-") for r in results]
     widths = [max(len(row[column]) for row in rows) for column in range(len(rows[0]))]
-    print(f"\nSummary (root: {root})")
+    _print(f"\nSummary (root: {root})")
     for row in rows:
-        print(
-            "  "
-            + "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True)).rstrip()
-        )
+        cells = (cell.ljust(width) for cell, width in zip(row, widths, strict=True))
+        _print(("  " + "  ".join(cells)).rstrip())
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point; returns the exit code."""
+    _safe_console()
     parser = _build_parser()
     args = parser.parse_args(argv)
     try:
@@ -1556,7 +2051,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         results = _download_datasets(names, root, args.force, args.timeout, quiet=False)
     except KeyboardInterrupt:
-        print("\nInterrupted; temporary files were removed.", file=sys.stderr)
+        _write(sys.stderr, "\nInterrupted; temporary files were removed.\n")
         return 130
     _print_summary(results, root)
     failed = [r for r in results if not r.ok]
