@@ -1,0 +1,53 @@
+[project]
+name = "pbl-simplified-unet-sr"
+version = "0.1.0"
+description = "PBL reproduction of 'Single Image Super Resolution based on a Modified U-net with Mixed Gradient Loss' (UnetSR / UnetSR+)"
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "matplotlib>=3.8",
+    "pandas>=2.1",
+    "tqdm>=4.66",
+    "ipywidgets>=8.1",
+    "jupyterlab>=4.2",
+    "ipykernel>=6.29",
+    "papermill>=2.6",
+]
+
+# PyTorch is installed through exactly ONE of these extras (they are mutually exclusive):
+#   uv sync --extra cu130   NVIDIA Turing (RTX 20xx) ... Blackwell (RTX 50xx), driver >= 580
+#   uv sync --extra cu126   NVIDIA Maxwell / Pascal / Volta (GTX 9xx/10xx, V100) or driver 525-579
+#   uv sync --extra cpu     no NVIDIA GPU (CPU, or Apple-Silicon MPS on macOS)
+# Pass the same --extra to every later `uv sync`, otherwise uv removes torch again.
+[project.optional-dependencies]
+cpu = ["torch>=2.6"]
+cu126 = ["torch>=2.6"]
+cu130 = ["torch>=2.6"]
+
+[tool.uv]
+package = false
+conflicts = [[{ extra = "cpu" }, { extra = "cu126" }, { extra = "cu130" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu126", extra = "cu126" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true

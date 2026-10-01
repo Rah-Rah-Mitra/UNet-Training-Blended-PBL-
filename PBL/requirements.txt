@@ -1,0 +1,24 @@
+# PBL - Simplified U-Net super-resolution: requirements for the pip / `uv pip` route
+# (alternative to `uv sync --extra <variant>` with pyproject.toml - see README.md).
+#
+# uv, auto-detecting the right PyTorch build for your NVIDIA driver (needs uv >= 0.9.4):
+#   uv venv --python 3.12
+#   uv pip install -r requirements.txt --torch-backend=auto
+#   uv run --no-sync jupyter lab
+#
+# plain pip: install the PyTorch build for your GPU first, then the rest:
+#   pip install torch --index-url https://download.pytorch.org/whl/cu130    # or cu126 / cpu
+#   pip install -r requirements.txt
+#
+# torch>=2.14 keeps --torch-backend=auto from falling back to the old cu129 index (torch 2.8)
+# on drivers older than 580, which has no kernels for Pascal GPUs.
+torch>=2.14
+numpy>=1.26
+pillow>=10.0
+matplotlib>=3.8
+pandas>=2.1
+tqdm>=4.66
+ipywidgets>=8.1
+jupyterlab>=4.2
+ipykernel>=6.29
+papermill>=2.6

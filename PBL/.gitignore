@@ -1,0 +1,14 @@
+# local environment
+.venv/
+# uv.lock is generated per machine by `uv sync --extra <variant>`
+# (delete this line if you want to commit your own lock file)
+uv.lock
+
+# downloaded datasets, training runs and checkpoints
+data/
+runs/
+*.pt
+
+# notebook / python caches
+.ipynb_checkpoints/
+__pycache__/
