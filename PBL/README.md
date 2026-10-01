@@ -16,6 +16,7 @@ Everything new lives in `PBL/`; the original code is not modified.
 | [`pyproject.toml`](pyproject.toml), [`.python-version`](.python-version) | uv project: Python 3.12, PyTorch as `cpu` / `cu126` / `cu130` extras |
 | [`requirements.txt`](requirements.txt) | the same dependencies for `pip` / `uv pip` |
 | [`results/bicubic_calibration.csv`](results/bicubic_calibration.csv) | the needs-no-training protocol study behind §5 |
+| [`results/sanity_x8_BSD300_40ep_*`](results/) | the two short training runs of §7 (config, per-epoch history, metrics, curves) |
 
 **Contents**
 1. [Quick start](#1-quick-start-uv)
@@ -316,10 +317,15 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 
 ## 7 Does it perform like the paper?
 
-**Short answer:** everything that can be checked without full training matches the paper: the architecture, the
-parameter count, the metrics and the data protocol. The full 300-epoch training runs that would produce the
-UnetSR/UnetSR+ numbers have **not** been run in the build sandbox, which is CPU-only and was asked for a smoke test only.
-They are one papermill command each on a GPU, and the notebook fills in the comparison automatically.
+**Short answer:**
+
+* Everything that can be checked without full training matches the paper: the architecture, the parameter count, the
+  metrics and the data protocol.
+* The one configuration trained here, ×8 on BSD300, is within the "matches" threshold after only **40 of the ~300
+  epochs**. That ran on a 4-core CPU (≈ 25 min per run).
+* The full grid (×2 / ×4 / ×8 on all three datasets, 300 epochs each) was not run in the build sandbox, which is
+  CPU-only and was asked for a smoke test only. Each run is one papermill command on a GPU, and the notebook fills in
+  the comparison automatically.
 
 | check | result | evidence |
 |---|---|---|
@@ -328,8 +334,26 @@ They are one papermill command each on a GPU, and the notebook fills in the comp
 | metric implementation | ✅ SSIM identical to the repo's `pytorch_ssim` (\|Δ\| = 0) | notebook §5 |
 | data protocol (bicubic rows of Table 2) | ✅ SET14 **exact** at ×2/×4/×8; BSD300 within **0.03 dB / 0.002 SSIM**; ⚠️ ICDAR2003 unverified | `results/bicubic_calibration.csv` |
 | pipeline runs end to end | ✅ ×2/×4/×8 × {mse, mixge, l1_ssim}, AMP, augmentation, resume (≤ 1e-8 from an uninterrupted run), SET14/ICDAR paths | papermill smoke tests |
-| learns | ✅ sanity run, ×8 BSD300 on CPU: SANITY_PLACEHOLDER | `MODE=train`, short budget |
-| UnetSR / UnetSR+ PSNR at 300 epochs | ⏳ **not run here.** Run the commands below on a GPU | `runs/summary.md` |
+| learns, and approaches the paper | ✅ ×8 BSD300, 40 epochs on CPU: UnetSR+ **21.75 dB / 0.520**, UnetSR 21.74 / 0.520, against the paper's 22.04 / 0.524 and 21.99 / 0.523 (−0.29 / −0.24 dB) | table below, [`results/`](results/) |
+| full grid at the paper's budget | ⏳ **not run here.** Run the commands below on a GPU | `runs/summary.md` |
+
+**Measured here: ×8 on BSD300, 40 epochs**, default settings otherwise (`repo_crop`, batch 1, Adam 1e-3 halved at
+epoch 25, seed 123), single run:
+
+| model | PSNR / SSIM | gain over bicubic | paper (Table 2) | paper gain | verdict, absolute / gain |
+|---|---|---|---|---|---|
+| UnetSR+ (MixGE, Sobel ÷ 8) | 21.746 / 0.5201 | +0.40 dB | 22.0368 / 0.5235 | +0.73 dB | matches / close |
+| UnetSR (MSE) | 21.742 / 0.5195 | +0.40 dB | 21.9865 / 0.5231 | +0.68 dB | matches / matches |
+| bicubic (same pairs) | 21.342 / 0.4951 | — | 21.3115 / 0.4933 | — | — |
+
+The test PSNR was still rising at epoch 40, with the learning rate still at 5e-4; see
+[`results/sanity_x8_BSD300_40ep_mixge/curves.png`](results/sanity_x8_BSD300_40ep_mixge/curves.png). Both runs, with
+their config, per-epoch history and `metrics.json`, are in [`results/`](results/). Re-run them with the command below.
+Expect the same numbers on a CPU, up to floating-point differences between machines; a GPU differs slightly more.
+
+```bash
+uv run papermill SimplifiedUNetSR.ipynb runs/x8_mixge_40.ipynb -p SCALE 8 -p LOSS mixge -p EPOCHS 40 -p EVAL_EVERY 5
+```
 
 **To finish the comparison**, run the following from `PBL/`. On a GPU, the notebook prints an ETA after the first
 epoch.
@@ -374,7 +398,7 @@ baselines.
   there.
 * **BSD300 is the most reliable comparison.** The protocol is reproduced to 0.03 dB, and it has 100 test images. The
   paper's UnetSR → UnetSR+ gain on BSD300 is small (+0.42 / +0.12 / +0.05 dB at ×2/×4/×8), so a single run of each may
-  not separate the two.
+  not separate the two. The ×8 runs above are an example: they differ by 0.004 dB.
 * **For ICDAR2003, check the protocol first.** Run `MODE=calibrate` when the data is there: the protocol is unverified,
   and the official test set has 251 images against the paper's 249.
 * **The paper leaves several things unstated**: the number of epochs (300 is the repo's example), the random seed, how

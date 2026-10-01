@@ -1,0 +1,61 @@
+{
+ "config": {
+  "DATASET": "BSD300",
+  "SCALE": 8,
+  "LOSS": "mixge",
+  "LAMBDA_G": 0.1,
+  "SOBEL_NORM": true,
+  "EPOCHS": 40,
+  "BATCH_SIZE": 1,
+  "LR": 0.001,
+  "LR_STEP": 25,
+  "LR_GAMMA": 0.5,
+  "WEIGHT_DECAY": 1e-06,
+  "AUGMENT": false,
+  "PROTOCOL": "repo_crop",
+  "HR_SIZE": 256,
+  "HR_MODE": "crop",
+  "LR_FILTER": "bilinear",
+  "EVAL_SETS": [
+   "BSD300"
+  ],
+  "EVAL_EVERY": 5,
+  "SEED": 123,
+  "AMP": false,
+  "SMOKE_TEST": false,
+  "MODE": "train",
+  "RUN_NAME": "sanity40_x8_mixge",
+  "DEVICE": "cpu"
+ },
+ "results": {
+  "BSD300": {
+   "set": "BSD300",
+   "images": 100,
+   "psnr": 21.745655708312988,
+   "ssim": 0.5201003740727902,
+   "psnr_y": 23.270049381256104,
+   "ssim_y": 0.5398246809840203,
+   "bicubic_psnr": 21.341849031448366,
+   "bicubic_ssim": 0.49508762136101725,
+   "paper_method": "UnetSR+",
+   "paper_psnr": 22.0368,
+   "paper_ssim": 0.5235,
+   "paper_bicubic_psnr": 21.3115,
+   "paper_bicubic_ssim": 0.4933,
+   "d_psnr": -0.2911442916870115,
+   "d_ssim": -0.0033996259272097706,
+   "gain_psnr": 0.40380667686462246,
+   "paper_gain_psnr": 0.7253000000000007,
+   "d_gain_psnr": -0.32149332313537826,
+   "verdict_absolute": "matches",
+   "verdict_gain": "close"
+  }
+ },
+ "epochs_trained": 40,
+ "train_seconds": 1378.3439509868622,
+ "environment": {
+  "torch": "2.14.1+cu130",
+  "device": "cpu",
+  "gpu": null
+ }
+}

@@ -8,8 +8,8 @@ next to ``SimplifiedUNetSR.ipynb``::
     data/
       BSD300/train/*.jpg    200 images, BSDS300 train split (original names, e.g. 100075.jpg)
       BSD300/test/*.jpg     100 images, BSDS300 test split
-      SET14/train/*.png      11 images: the 14 Set14 images (baboon.png, ... zebra.png) except
-      SET14/test/*.png        3 images: comic.png, monarch.png and zebra.png (the notebook's split)
+      SET14/train/*.png      11 Set14 images (baboon.png, barbara.png, ... ppt3.png)
+      SET14/test/*.png        3 Set14 images: comic.png, monarch.png, zebra.png (notebook's split)
       ICDAR2003/train/*     258 images, ICDAR 2003 Robust Reading "SceneTrialTrain"
       ICDAR2003/test/*      251 images, "SceneTrialTest" (the paper reports 249)
       PROVENANCE.json       per dataset: source, URLs, UTC time, counts, verification, licence
@@ -773,7 +773,7 @@ class _ManifestCheck:
         if self.missing:
             parts.append(f"{len(self.missing)} of {self.total} listed files missing")
         if self.unlisted:
-            parts.append(f"{len(self.unlisted)} images not listed")
+            parts.append(f"{len(self.unlisted)} image file(s) not listed")
         return ", ".join(parts) or "no differences"
 
 
@@ -1845,12 +1845,13 @@ def _verify(spec: _DatasetSpec, root: Path, report: _Reporter) -> _Result:
             problems.append(f"... and {len(mismatches) - 10} more sha256 mismatches")
         if missing:
             problems.append(
-                f"{len(missing)} of the {check.total} files listed in dataset_manifest.json "
-                f"are missing: {_some(missing)}"
+                f"missing: {len(missing)} of the {check.total} files listed in "
+                f"dataset_manifest.json ({_some(missing)})"
             )
         if unlisted:
             problems.append(
-                f"{len(unlisted)} images are not listed in dataset_manifest.json: {_some(unlisted)}"
+                f"not listed in dataset_manifest.json: {len(unlisted)} image file(s) "
+                f"({_some(unlisted)})"
             )
         hashes = (
             f"sha256 of {check.checked}/{check.total} listed files checked against "
