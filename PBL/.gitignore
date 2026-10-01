@@ -1,7 +1,7 @@
 # local environment
 .venv/
-# uv.lock is generated per machine by `uv sync --extra <variant>`
-# (delete this line if you want to commit your own lock file)
+# uv.lock is written by the first `uv sync` (one universal lock for all platforms and extras);
+# this project does not commit it - delete the next line to commit your own
 uv.lock
 
 # downloaded datasets, training runs and checkpoints

@@ -1,0 +1,11 @@
+images,n_images,max_abs_d_psnr,max_abs_d_ssim
+comic monarch zebra,3,0.0,0.0
+comic zebra,2,0.3547,0.0522
+comic monarch,2,0.5779,0.0262
+comic monarch zebra flowers,4,0.6,0.0185
+comic zebra flowers,3,0.669,0.0209
+comic monarch zebra ppt3,4,0.7002,0.0677
+monarch,1,0.7093,0.1045
+comic zebra ppt3,3,0.757,0.0554
+monarch zebra,2,0.9223,0.0428
+comic monarch zebra bridge,4,1.0081,0.014

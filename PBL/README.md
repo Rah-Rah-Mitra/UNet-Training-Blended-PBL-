@@ -18,6 +18,8 @@ Everything new lives in `PBL/`; the original code is not modified.
 | [`pyproject.toml`](pyproject.toml), [`.python-version`](.python-version) | uv project: Python 3.12, PyTorch as `cpu` / `cu126` / `cu130` extras |
 | [`requirements.txt`](requirements.txt) | the same dependencies for `pip` / `uv pip` |
 | [`results/bicubic_calibration.csv`](results/bicubic_calibration.csv) | the needs-no-training protocol study behind §5 |
+| [`results/set14_subset_search.csv`](results/set14_subset_search.csv) | which Set14 images form the paper's SET14 test set (§3) |
+| [`GPU_SESSION.md`](GPU_SESSION.md) | checklist for the first run on a GPU machine: setup, tests and a 30-minute training run |
 | [`results/sanity_x8_BSD300_40ep_*`](results/) | the two short training runs of §7 (config, per-epoch history, metrics, curves) |
 | [`results/ablation_x8_BSD300_15ep_mixge_raw`](results/ablation_x8_BSD300_15ep_mixge_raw/) | the literal-Sobel MixGE run of the §2 ablation |
 
@@ -43,26 +45,30 @@ works the same in Linux shells and Windows PowerShell):
 ```bash
 cd PBL
 uv sync --extra cu130                      # pick ONE extra: cu130 | cu126 | cpu  (table below)
-uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.backends.mps.is_available())"
 uv run python download_datasets.py         # BSD300 + SET14 + ICDAR2003 -> PBL/data/
 uv run jupyter lab SimplifiedUNetSR.ipynb  # then: Run > Run All Cells
 ```
 
 | your hardware | extra | requirement |
 |---|---|---|
-| NVIDIA Turing → Blackwell: RTX 20xx/30xx/40xx/50xx, A100, H100, … | `cu130` | NVIDIA driver ≥ 580 (Linux 580.65, Windows 580.88) |
-| NVIDIA Maxwell → Volta: GTX 9xx/10xx, Titan X/V, V100, or any GPU with driver 525–579 | `cu126` | driver ≥ 525.60 (Linux) / 528.33 (Windows) |
-| no NVIDIA GPU, or macOS (Apple-Silicon GPU via MPS) | `cpu` | none |
+| NVIDIA Turing → Blackwell: RTX 20xx/30xx/40xx/50xx, A100, H100, B200, … | `cu130` | NVIDIA driver ≥ 580 (Linux 580.65, Windows 580.88); the only choice for RTX 50xx / B200 |
+| NVIDIA Maxwell → Volta: GTX 9xx/10xx, Titan X/V, V100; or a Turing → Hopper GPU that must stay on driver 525–579 | `cu126` | driver ≥ 525.60 (Linux) / 528.33 (Windows); has no Blackwell kernels |
+| no NVIDIA GPU (Linux, Windows) | `cpu` | none |
+| macOS: Apple Silicon (M1 or newer), GPU used via MPS | `cpu` | macOS 14 Sonoma or newer; current PyTorch has no wheels for Intel Macs or macOS 13 |
 
 > **uv does not remember extras.** Pass the same `--extra` to every `uv sync`; a plain `uv sync` removes PyTorch
-> again. `uv run` leaves the environment alone. The first `uv sync` writes a machine-specific `uv.lock`, which is
-> git-ignored.
+> again. `uv run` leaves the environment alone. The first `uv sync` writes `uv.lock` (one lock file for all platforms
+> and extras); this project does not commit it.
 
-A working GPU setup prints something like `2.14.1+cu130 True`. A `+cpu` version, or `False`, means the wrong build or
-driver; see [§9](#9-troubleshooting). Section 2 of the notebook prints a diagnosis and the fix.
+A working NVIDIA setup prints something like `2.14.1+cu130 True False`, an Apple-Silicon Mac `2.14.1 False True`. On
+an NVIDIA machine, a `+cpu` version or `False` for CUDA means the wrong build or driver; see [§9](#9-troubleshooting).
+Section 2 of the notebook prints a diagnosis and the fix.
 
 **Headless and batch runs** use [papermill](https://papermill.readthedocs.io). Any variable in the notebook's first
-code cell can be overridden with `-p NAME value`:
+code cell can be overridden with `-p NAME value` (booleans as `True` / `False`; `true` / `false` work too). Every
+configuration gets its own folder `runs/<RUN_NAME>/`: the default name tags each setting you changed, e.g.
+`BSD300_x4_mixge_lg0.01`, so runs never overwrite each other.
 
 ```bash
 uv run papermill SimplifiedUNetSR.ipynb runs/smoke.ipynb -p SMOKE_TEST True       # checks the pipeline in ~20 s
@@ -84,12 +90,13 @@ then `pip install -r requirements.txt`.
 > **What was tested where.** This folder was built in a CPU-only Linux sandbox that could reach GitHub and PyPI only.
 >
 > **Verified there:** the uv environment (PyPI's torch 2.14.1, a CUDA 13.0 build, running on CPU); the dataset download
-> from the pinned GitHub mirrors; the notebook end to end (×2/×4/×8, all losses, resume, AMP, `MODE=calibrate`); and the
-> protocol study.
+> from the pinned GitHub mirrors; the notebook end to end on CPU (×2/×4/×8, all losses, resume, AMP, hold-out,
+> `MODE=calibrate`); and the protocol study.
 >
-> **Not runnable there:** the PyTorch CUDA wheels and the Windows/macOS setup, which need download.pytorch.org; the
-> original Berkeley/HuggingFace hosts; and the ICDAR2003 servers, which are plain HTTP and are covered by
-> fixture-based tests instead.
+> **Not runnable there:** training on a GPU (the CUDA and MPS code paths, resume included, were reviewed but not run);
+> the PyTorch CUDA wheels and the Windows/macOS setup, which need download.pytorch.org; the original
+> Berkeley/HuggingFace hosts; and the ICDAR2003 servers, which are plain HTTP and are covered by fixture-based tests
+> instead.
 
 ---
 
@@ -198,17 +205,22 @@ Three smaller details the paper leaves open are fixed as follows:
 
 | dataset | content | split used here | paper |
 |---|---|---|---|
-| **BSD300** (BSDS300, Martin et al. 2001) | 300 natural photos, 481×321 | train 200 / test 100 (official split) | the same |
+| **BSD300** (BSDS300, Martin et al. 2001) | 300 natural photos, 481×321 | train 200 / test 100 (official split) | not stated; the bicubic match (§5) implies the official split |
 | **SET14** (Zeyde et al. 2010) | 14 classic test images | train 11 / **test 3: comic, monarch, zebra** | not stated; inferred, see below |
 | **ICDAR2003** Robust Reading (Lucas et al. 2003) | scene-text photos, 422×102 … 640×480 (paper §4.1) | train 258 / test 251 (official TrialTrain / TrialTest) | 258 / 249 |
 
 **Why SET14 is split 11 / 3.** The paper never says how it used SET14. The repository's data code expects
 `<dataset>/images/{train,test}` for *every* dataset, and its comments list `SET14/images`. The decisive evidence:
 **the paper's SET14 bicubic numbers are reproduced to all four decimals, in PSNR and SSIM at ×2, ×4 and ×8, if and
-only if the test set is `comic`, `monarch` and `zebra`.** No other subset of the 14 images comes close
-(see [§5](#5-pre-processing-and-evaluation-protocol)). The other 11 images are the training set.
+only if the test set is `comic`, `monarch` and `zebra`.** `MODE=calibrate` checks all 16,383 subsets of the 14
+images; the next best one, comic + zebra, is 0.35 dB / 0.052 SSIM off
+([`results/set14_subset_search.csv`](results/set14_subset_search.csv)).
+Which images the authors trained their SET14 models on is not known; the notebook assumes the other 11.
 
-Add `"SET14_ALL"` to `EVAL_SETS` to also score a model on all 14 images, as most SR papers do.
+To score a model trained on another dataset (e.g. BSD300) on all 14 images, as most SR papers do, add `"SET14_ALL"` to
+`EVAL_SETS`. For a SET14-trained model, SET14_ALL would include its 11 training images; the notebook warns about that.
+`VAL_HOLDOUT = 50` sets aside 50 seeded training images as an extra test set `<DATASET>_VAL`, as the paper did for its
+depth and λ<sub>G</sub> studies (§4.4.1); the files in `data/` are not touched.
 
 ### `download_datasets.py`
 
@@ -241,8 +253,13 @@ Notes:
 * The GitHub mirrors are pinned to a commit, and every file is hash-checked.
 * The SelfExSR copies of comic, ppt3 and zebra have at most one pixel row or column trimmed so that sizes are even.
   These exact files reproduce the paper's SET14 bicubic row to the fourth decimal.
-* **ICDAR2003 is only served over plain HTTP.** If your network blocks that, download the two zips by hand (the script
-  prints the URLs and checksums), put them in `PBL/data/.downloads/`, and re-run the script.
+* **ICDAR2003 is only served over plain HTTP.** If your network blocks that, download the two zips by hand. Both are
+  called `scene.zip`, so save `TrialTrain/scene.zip` as `PBL/data/.downloads/icdar2003_train.zip` and
+  `TrialTest/scene.zip` as `PBL/data/.downloads/icdar2003_test.zip`, then re-run the script. When the download fails,
+  the script prints both URLs with these target paths and their SHA-256; `--list-sources` shows them too. (With
+  another `--root` or `DATA_DIR`, use its `.downloads/` folder.)
+* The same works for the other datasets: `.downloads/BSDS300-images.tgz` and `.downloads/Set14_HR.tar.gz` are used
+  before any download is tried.
 * **Licences.**
   * BSDS300 is free for non-commercial research and education.
   * Set14 and ICDAR2003 are research benchmarks.
@@ -279,17 +296,19 @@ dataset (`results/bicubic_calibration.csv`):
 
 | protocol (notebook name) | HR ground truth | LR input | SET14 (3 test images) Δ vs paper, ×2 / ×4 / ×8 | BSD300 Δ vs paper, ×2 / ×4 / ×8 |
 |---|---|---|---|---|
-| **`repo_crop`** (repo data loader) | central 256×256 crop, zero-padded if smaller | **bilinear** ↓s | **+0.0000 / −0.0000 / −0.0000 dB**, SSIM ±0.0000 | **+0.028 / +0.035 / +0.030 dB**, SSIM +0.001…0.002 |
+| **`repo_crop`** (PyTorch SR example) | central 256×256 crop, zero-padded if smaller | **bilinear** ↓s | **+0.0000 / −0.0000 / −0.0000 dB**, SSIM ±0.0000 | **+0.028 / +0.035 / +0.030 dB**, SSIM +0.001…0.002 |
 | `icdar_resize` | whole photo → 224×224 bicubic | bilinear ↓s | −0.89 / −0.17 / +1.31 dB | +0.72 / +0.55 / +0.37 dB |
 | `paper_text` (as written) | whole photo → 224×224 bicubic | **bicubic** ↓s | +0.36 / +0.25 / +1.52 dB | +1.63 / +0.98 / +0.68 dB |
 
-**Conclusion.** The paper's BSD300 and SET14 numbers come from the repository's data loader. That loader is the
-PyTorch super-resolution example: `CenterCrop(256)`, then `Resize(256//s)`, whose default filter is bilinear. They do
-not come from the 224-pixel bicubic resize described in the text, which probably refers only to how the ICDAR2003
-photos were prepared (§4.1).
+**Conclusion.** The paper's BSD300 and SET14 numbers come from the pipeline of the PyTorch super-resolution example
+that the repository's `dataset/data.py` is derived from: `CenterCrop(256)`, then `Resize(256//s)`, whose default filter
+is bilinear. (The committed `data.py` has the `CenterCrop` lines commented out, see §8.) The numbers do not come from
+the 224-pixel bicubic resize described in the text, which probably refers only to how the ICDAR2003 photos were
+prepared (§4.1).
 
 The notebook therefore defaults to `PROTOCOL="repo_crop"` for BSD300 and SET14. For ICDAR2003 it uses
-`icdar_resize`: a 224×224 bicubic resize as in §4.1, plus the loader's bilinear LR. ICDAR2003 could not be downloaded
+`icdar_resize`: a 224×224 bicubic resize as in §4.1, plus the loader's bilinear LR. With `PROTOCOL="auto"` (the
+default) every dataset, including extra test sets in `EVAL_SETS`, gets its own protocol. ICDAR2003 could not be downloaded
 in the build sandbox, so that choice is **unverified**. Running `-p MODE calibrate` once the data is present shows
 which variant reproduces the paper's ICDAR2003 bicubic row.
 
@@ -309,8 +328,8 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 
 | | paper (text) | repository code | **notebook default** |
 |---|---|---|---|
-| training data | per dataset (§4.3) | `<dataset>/images/train` | `DATASET` = BSD300 (or SET14, ICDAR2003); one model per dataset |
-| HR / LR | 224×224, bicubic (Table 1) | 256 centre crop, bilinear `Resize` | `repo_crop`; `icdar_resize` for ICDAR2003 (§5) |
+| training data | not stated (one model per dataset is implied) | `<dataset>/images/train` | `DATASET` = BSD300 (or SET14, ICDAR2003); one model per dataset |
+| HR / LR | 224×224, bicubic (Table 1) | `Resize(256)` / `Resize(256//s)` of the whole photo (`CenterCrop` commented out, §8) | `repo_crop`; `icdar_resize` for ICDAR2003 (§5) |
 | batch size | 1 | 1 | 1 |
 | optimiser | Adam β=(0.9, 0.999), ε=1e-8 | Adam, weight decay 1e-6 | Adam β=(0.9, 0.999), ε=1e-8, wd 1e-6 |
 | learning rate | 1e-3, halved every 25 epochs | 1e-3 (`argdemo.txt`); MultiStepLR at 50/100/150/200 | 1e-3, `StepLR(25, 0.5)` |
@@ -318,9 +337,11 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 | loss | MSE (UnetSR), MixGE with λ<sub>G</sub> = 0.1 (UnetSR+) | L1 + 0.1·(1 − SSIM) | `LOSS="mixge"` (`"mse"`, `"l1_ssim"`) |
 | Sobel scale in MGE | raw ±1/±2 kernels printed; MGE described as "auxiliary" | `GraLoss` divides by 100 and 10 000 (unused) | kernels ÷ 8 (`SOBEL_NORM=True`), see §2 |
 | initialisation | not stated | PyTorch default (`weight_init` is a no-op) | PyTorch default |
-| augmentation | none | none | none (`AUGMENT=True` optional) |
+| augmentation | not stated | none | none (`AUGMENT=True` optional) |
+| hold-out set | 50 random training images, for the depth and λ<sub>G</sub> studies (§4.4.1) | none | none (`VAL_HOLDOUT=50` optional) |
 | seed | not stated | 123 (set *after* the model is built) | 123, set *before* the model is built |
 | model selection | not stated | last epoch | last epoch (test monitoring every `EVAL_EVERY` epochs) |
+| run folder | – | – | `runs/<RUN_NAME>/`, one per configuration; resuming checks every training setting |
 | hardware | 1× RTX 2080, PyTorch | PyTorch 1.x (2019) | any CUDA GPU, MPS or CPU; optional bf16 `AMP` |
 
 ---
@@ -330,7 +351,8 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 **Short answer:**
 
 * Everything that can be checked without full training matches the paper: the architecture, the parameter count, the
-  metrics and the data protocol.
+  metrics, and the data protocol for BSD300 and SET14. (ICDAR2003 could not be downloaded here, so its protocol is
+  unchecked.)
 * The one configuration trained here, ×8 on BSD300, is within the "matches" threshold after only **40 of the ~300
   epochs**. That ran on a 4-core CPU (≈ 25 min per run).
 * The full grid (×2 / ×4 / ×8 on all three datasets, 300 epochs each) was not run in the build sandbox, which is
@@ -342,10 +364,10 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 | architecture = authors' code | ✅ identical outputs to `UNet2/4/8` with the same weights (max \|Δ\| = 0) | notebook §4 |
 | parameter count | ✅ 8,495,907 (×2) = paper's **8.50 M** (Table 3, Fig. 3) | notebook §4 |
 | metric implementation | ✅ SSIM identical to the repo's `pytorch_ssim` (\|Δ\| = 0) | notebook §5 |
-| data protocol (bicubic rows of Table 2) | ✅ SET14 **exact** at ×2/×4/×8; BSD300 within **0.03 dB / 0.002 SSIM**; ⚠️ ICDAR2003 unverified | `results/bicubic_calibration.csv` |
+| data protocol (bicubic rows of Table 2) | ✅ SET14 **exact** at ×2/×4/×8; BSD300 within **0.035 dB / 0.0021 SSIM**; ⚠️ ICDAR2003 unverified | `results/bicubic_calibration.csv` |
 | pipeline runs end to end | ✅ ×2/×4/×8 × {mse, mixge, l1_ssim}, AMP, augmentation, resume (≤ 1e-8 from an uninterrupted run), SET14/ICDAR paths | papermill smoke tests |
 | learns, and approaches the paper | ✅ ×8 BSD300, 40 epochs on CPU: UnetSR+ **21.75 dB / 0.520**, UnetSR 21.74 / 0.520, against the paper's 22.04 / 0.524 and 21.99 / 0.523 (−0.29 / −0.24 dB) | table below, [`results/`](results/) |
-| full grid at the paper's budget | ⏳ **not run here.** Run the commands below on a GPU | `runs/summary.md` |
+| full grid at the repo's 300-epoch budget (the paper does not state its epochs) | ⏳ **not run here.** Run the commands below on a GPU | `runs/summary.md` |
 
 **Measured here: ×8 on BSD300, 40 epochs**, default settings otherwise (`repo_crop`, batch 1, Adam 1e-3 halved at
 epoch 25, seed 123), single run:
@@ -356,29 +378,40 @@ epoch 25, seed 123), single run:
 | UnetSR (MSE) | 21.742 / 0.5195 | +0.40 dB | 21.9865 / 0.5231 | +0.68 dB | matches / matches |
 | bicubic (same pairs) | 21.342 / 0.4951 | — | 21.3115 / 0.4933 | — | — |
 
-The test PSNR was still rising at epoch 40, with the learning rate still at 5e-4; see
-[`results/sanity_x8_BSD300_40ep_mixge/curves.png`](results/sanity_x8_BSD300_40ep_mixge/curves.png). Both runs, with
-their config, per-epoch history and `metrics.json`, are in [`results/`](results/). Re-run them with the command below.
-Expect the same numbers on a CPU, up to floating-point differences between machines; a GPU differs slightly more.
+The test PSNR levelled off after epoch 30: UnetSR+ peaked at epoch 30 (21.767 dB) and UnetSR at epoch 35
+(21.776 dB), with the learning rate still at 5e-4; see
+[`results/sanity_x8_BSD300_40ep_mixge/curves.png`](results/sanity_x8_BSD300_40ep_mixge/curves.png). Whether the
+remaining ~260 epochs, with their further learning-rate halvings, close the last 0.25–0.3 dB is untested. Both runs,
+with their config, per-epoch history and `metrics.json`, are in [`results/`](results/). Re-run them with the commands
+below. Expect the same numbers on a CPU, up to floating-point differences between machines; a GPU differs slightly
+more.
 
 ```bash
 uv run papermill SimplifiedUNetSR.ipynb runs/x8_mixge_40.ipynb -p SCALE 8 -p LOSS mixge -p EPOCHS 40 -p EVAL_EVERY 5
+uv run papermill SimplifiedUNetSR.ipynb runs/x8_mse_40.ipynb -p SCALE 8 -p LOSS mse -p EPOCHS 40 -p EVAL_EVERY 5
 ```
 
 **To finish the comparison**, run the following from `PBL/`. On a GPU, the notebook prints an ETA after the first
 epoch.
 
 ```bash
-for s in 2 4 8; do for l in mse mixge; do
-  uv run papermill SimplifiedUNetSR.ipynb runs/BSD300_x${s}_${l}.ipynb -p DATASET BSD300 -p SCALE $s -p LOSS $l
-  uv run papermill SimplifiedUNetSR.ipynb runs/SET14_x${s}_${l}.ipynb -p DATASET SET14 -p SCALE $s -p LOSS $l
-  uv run papermill SimplifiedUNetSR.ipynb runs/ICDAR2003_x${s}_${l}.ipynb -p DATASET ICDAR2003 -p SCALE $s -p LOSS $l
-done; done
+# bash / zsh (Linux, macOS, WSL)
+for s in 2 4 8; do for l in mse mixge; do for d in BSD300 SET14 ICDAR2003; do
+  uv run papermill SimplifiedUNetSR.ipynb runs/${d}_x${s}_${l}.ipynb -p DATASET $d -p SCALE $s -p LOSS $l
+done; done; done
 uv run papermill SimplifiedUNetSR.ipynb runs/summary.ipynb -p MODE calibrate   # also writes the protocol study
 ```
 
+```powershell
+# Windows PowerShell
+foreach ($s in 2,4,8) { foreach ($l in 'mse','mixge') { foreach ($d in 'BSD300','SET14','ICDAR2003') {
+  uv run papermill SimplifiedUNetSR.ipynb "runs/${d}_x${s}_${l}.ipynb" -p DATASET $d -p SCALE $s -p LOSS $l } } }
+uv run papermill SimplifiedUNetSR.ipynb runs/summary.ipynb -p MODE calibrate
+```
+
 Each run writes `runs/<name>/metrics.json` with the absolute difference to the paper and the **gain over bicubic**
-compared with the paper's gain. Each comparison gets a verdict with thresholds fixed in advance:
+compared with the paper's gain. Each comparison with the matching paper row gets a verdict with thresholds fixed in
+advance (test sets of other datasets, `SET14_ALL` and the hold-out set are scored but get none):
 
 * **matches**: |ΔPSNR| ≤ 0.3 dB and |ΔSSIM| ≤ 0.01;
 * **close**: |ΔPSNR| ≤ 1 dB;
@@ -404,11 +437,11 @@ baselines.
 **What to keep in mind when you compare:**
 
 * **SET14 numbers are very noisy.** By our analysis they are means over only **3 test images**, from models that
-  learned from **11 images**. Some of the paper's own baselines (EDSR, FSRCNN, SRGAN at ×2) score *below* bicubic
+  presumably learned from the other **11 images**. Some of the paper's own baselines (EDSR, FSRCNN, SRGAN at ×2) score *below* bicubic
   there.
-* **BSD300 is the most reliable comparison.** The protocol is reproduced to 0.03 dB, and it has 100 test images. The
+* **BSD300 is the most reliable comparison.** The protocol is reproduced to 0.035 dB, and it has 100 test images. The
   paper's UnetSR → UnetSR+ gain on BSD300 is small (+0.42 / +0.12 / +0.05 dB at ×2/×4/×8), so a single run of each may
-  not separate the two. The ×8 runs above are an example: they differ by 0.004 dB.
+  not separate the two. The ×8 runs above are an example: they differ by 0.003 dB.
 * **For ICDAR2003, check the protocol first.** Run `MODE=calibrate` when the data is there: the protocol is unverified,
   and the official test set has 251 images against the paper's 249.
 * **The paper leaves several things unstated**: the number of epochs (300 is the repo's example), the random seed, how
@@ -441,17 +474,21 @@ The repository is a 2019 fork of [`icpm/super-resolution`](https://github.com/ic
 | symptom | fix |
 |---|---|
 | `torch.__version__` ends in `+cpu` on a GPU machine (Windows PyPI wheels are CPU-only) | `uv sync --extra cu130`, or `cu126` for GTX 9xx/10xx / V100 |
-| `torch.cuda.is_available()` is False with a `+cu130` build | your driver is older than 580: update it or use `--extra cu126` |
+| `torch.cuda.is_available()` is False with a `+cu130` build | your driver is older than 580: update it (required for RTX 50xx / Blackwell), or use `--extra cu126` on an older GPU |
 | "no kernel image is available" / "sm_61 is not compatible" | a pre-Turing GPU on the cu130 build: use `--extra cu126`, the build family that still ships Maxwell–Volta kernels |
+| "no kernel image is available" on an RTX 50xx / B200 (Blackwell) | the cu126 build has no Blackwell kernels: update the driver to ≥ 580 and use `--extra cu130` |
+| macOS: `uv sync` reports that torch has no wheel for your platform | current PyTorch needs Apple Silicon and macOS 14 or newer; on an Intel Mac use Linux, Windows or a cloud notebook |
 | `uv run` keeps re-installing / torch disappears | always pass the same `--extra` to `uv sync`; do not run a bare `uv sync` |
 | `--torch-backend` errors / no `cu130` choice | `uv self update` (needs uv ≥ 0.9.4) |
-| ICDAR2003 download fails ("HTTP" / timeout) | its servers are plain HTTP and often blocked: download the zips manually (URLs and SHA-256 printed by the script) into `PBL/data/.downloads/` and re-run |
+| ICDAR2003 download fails ("HTTP" / timeout) | its servers are plain HTTP and often blocked: download `TrialTrain/scene.zip` and `TrialTest/scene.zip` by hand, save them as `PBL/data/.downloads/icdar2003_train.zip` and `icdar2003_test.zip` (the script prints the URLs, paths and SHA-256), and re-run |
 | `FileNotFoundError: ... download_datasets.py` | start Jupyter / papermill from inside `PBL/` |
 | which parameters can I pass with `-p`? | `uv run papermill --help-notebook SimplifiedUNetSR.ipynb` lists them with their defaults |
 | papermill list parameters | pass text: `-p EVAL_SETS "BSD300,SET14_ALL"` |
 | papermill prints `Kernel is running over TCP without encryption` | harmless: the notebook's kernel only listens on `127.0.0.1` (your own machine) |
 | training is slow on CPU | use `SMOKE_TEST=True` to check the pipeline; train on a GPU (batch 1, < 1 GB of VRAM) |
-| interrupted run | re-run the same command: `RESUME=True` continues from `runs/<RUN_NAME>/last.pt` |
+| interrupted run | re-run the same command: `RESUME=True` continues from `runs/<RUN_NAME>/last.pt`, on any device |
+| `RuntimeError: runs/<name>/last.pt was trained with other settings` | a run folder holds one configuration only: leave `RUN_NAME` at `None` (the default name encodes the settings), pick another name, or set `RESUME=False` to start that folder from scratch |
+| a parameter change seems to have no effect in Jupyter | restart the kernel and run all cells; cells that ran earlier keep the old values |
 
 ---
 
