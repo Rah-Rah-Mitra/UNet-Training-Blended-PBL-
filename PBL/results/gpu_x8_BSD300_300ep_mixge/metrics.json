@@ -1,0 +1,66 @@
+{
+ "config": {
+  "DATASET": "BSD300",
+  "SCALE": 8,
+  "LOSS": "mixge",
+  "LAMBDA_G": 0.1,
+  "SOBEL_NORM": true,
+  "EPOCHS": 300,
+  "BATCH_SIZE": 1,
+  "LR": 0.001,
+  "LR_STEP": 25,
+  "LR_GAMMA": 0.5,
+  "WEIGHT_DECAY": 1e-06,
+  "AUGMENT": false,
+  "PROTOCOL": "repo_crop",
+  "HR_SIZE": 256,
+  "HR_MODE": "crop",
+  "LR_FILTER": "bilinear",
+  "EVAL_SETS": [
+   "BSD300"
+  ],
+  "EVAL_EVERY": 10,
+  "VAL_HOLDOUT": 0,
+  "SEED": 123,
+  "AMP": false,
+  "SMOKE_TEST": false,
+  "MODE": "train",
+  "RUN_NAME": "BSD300_x8_mixge",
+  "DEVICE": "cuda",
+  "EVALUATED_SETS": [
+   "BSD300"
+  ]
+ },
+ "results": {
+  "BSD300": {
+   "set": "BSD300",
+   "images": 100,
+   "psnr": 22.043084030151366,
+   "ssim": 0.5263109067082405,
+   "psnr_y": 23.45597780227661,
+   "ssim_y": 0.5444144649803638,
+   "bicubic_psnr": 21.341849575042726,
+   "bicubic_ssim": 0.49508763253688814,
+   "paper_method": "UnetSR+",
+   "paper_psnr": 22.0368,
+   "paper_ssim": 0.5235,
+   "paper_bicubic_psnr": 21.3115,
+   "paper_bicubic_ssim": 0.4933,
+   "d_psnr": 0.006284030151366693,
+   "d_ssim": 0.002810906708240579,
+   "gain_psnr": 0.70123445510864,
+   "paper_gain_psnr": 0.7253000000000007,
+   "d_gain_psnr": -0.024065544891360702,
+   "verdict_absolute": "matches",
+   "verdict_gain": "matches",
+   "protocol": "repo_crop"
+  }
+ },
+ "epochs_trained": 300,
+ "train_seconds": 992.7313756942749,
+ "environment": {
+  "torch": "2.14.1+cu130",
+  "device": "cuda",
+  "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design"
+ }
+}

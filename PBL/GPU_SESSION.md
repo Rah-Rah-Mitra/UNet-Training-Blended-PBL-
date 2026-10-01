@@ -1,5 +1,12 @@
 # GPU session: verify the notebook on a real GPU
 
+> **Status, 2026-10-01: done** on an RTX 2070 Max-Q (Windows 11, driver 610.62, `--extra cu130`).
+>
+> * T1–T15 pass with no code fix needed.
+> * The 300-epoch ×8 UnetSR+ run matches the paper; see README §7 and `results/gpu_x8_BSD300_300ep_mixge/`.
+> * Still open: ICDAR2003, which could not be downloaded, so T12's ICDAR part is untested; cu126; MPS; Linux with CUDA;
+>   bf16 on an Ampere or newer GPU.
+
 Start a new local Claude Code session on the GPU machine and give it this file, for example:
 *"Read `PBL/GPU_SESSION.md` and do what it says."*
 

@@ -21,6 +21,7 @@ Everything new lives in `PBL/`; the original code is not modified.
 | [`results/set14_subset_search.csv`](results/set14_subset_search.csv) | which Set14 images form the paper's SET14 test set (§3) |
 | [`GPU_SESSION.md`](GPU_SESSION.md) | checklist for the first run on a GPU machine: setup, tests and a 30-minute training run |
 | [`results/sanity_x8_BSD300_40ep_*`](results/) | the two short training runs of §7 (config, per-epoch history, metrics, curves) |
+| [`results/gpu_x8_BSD300_300ep_mixge`](results/gpu_x8_BSD300_300ep_mixge/) | the 300-epoch GPU run of §7, with before/after images of three BSD300 test images |
 | [`results/ablation_x8_BSD300_15ep_mixge_raw`](results/ablation_x8_BSD300_15ep_mixge_raw/) | the literal-Sobel MixGE run of the §2 ablation |
 
 **Contents**
@@ -46,7 +47,7 @@ works the same in Linux shells and Windows PowerShell):
 cd PBL
 uv sync --extra cu130                      # pick ONE extra: cu130 | cu126 | cpu  (table below)
 uv run python -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.backends.mps.is_available())"
-uv run python download_datasets.py         # BSD300 + SET14 + ICDAR2003 -> PBL/data/
+uv run python download_datasets.py         # BSD300 + SET14 + ICDAR2003 -> PBL/data/ (ICDAR2003 is plain HTTP: if it fails, see §3)
 uv run jupyter lab SimplifiedUNetSR.ipynb  # then: Run > Run All Cells
 ```
 
@@ -87,16 +88,23 @@ uv run --no-sync jupyter lab SimplifiedUNetSR.ipynb
 With plain pip, run `pip install torch --index-url https://download.pytorch.org/whl/cu130` (or `cu126` / `cpu`) first,
 then `pip install -r requirements.txt`.
 
-> **What was tested where.** This folder was built in a CPU-only Linux sandbox that could reach GitHub and PyPI only.
+> **What was tested where.** This folder was built in a CPU-only Linux sandbox that could reach GitHub and PyPI only,
+> then checked on a GPU machine.
 >
-> **Verified there:** the uv environment (PyPI's torch 2.14.1, a CUDA 13.0 build, running on CPU); the dataset download
-> from the pinned GitHub mirrors; the notebook end to end on CPU (×2/×4/×8, all losses, resume, AMP, hold-out,
+> **Verified in the sandbox:** the uv environment (PyPI's torch 2.14.1, a CUDA 13.0 build, running on CPU); the dataset
+> download from the pinned GitHub mirrors; the notebook end to end on CPU (×2/×4/×8, all losses, resume, AMP, hold-out,
 > `MODE=calibrate`); and the protocol study.
 >
-> **Not runnable there:** training on a GPU (the CUDA and MPS code paths, resume included, were reviewed but not run);
-> the PyTorch CUDA wheels and the Windows/macOS setup, which need download.pytorch.org; the original
-> Berkeley/HuggingFace hosts; and the ICDAR2003 servers, which are plain HTTP and are covered by fixture-based tests
-> instead.
+> **Verified on a GPU** (Windows 11, NVIDIA GeForce RTX 2070 with Max-Q Design, compute capability 7.5, driver 610.62):
+> both setup routes, `uv sync --extra cu130` and `uv pip install -r requirements.txt --torch-backend=auto`, each giving
+> torch 2.14.1+cu130; the BSD300 download from the Berkeley HTTPS host; the checklist in
+> [`GPU_SESSION.md`](GPU_SESSION.md) (training, resuming finished and interrupted runs from papermill and from a Jupyter
+> kernel, the settings check, the float32 fallback for `AMP` on a pre-Ampere GPU, hold-out, cross-dataset scores,
+> `MODE=calibrate` reproducing both committed CSVs unchanged, CPU-portable weights); and a 300-epoch ×8 run (§7).
+>
+> **Not verified anywhere:** MPS (macOS), CUDA on Linux, the cu126 build, bf16 `AMP` on an Ampere or newer GPU, the
+> HuggingFace host, and ICDAR2003, whose plain-HTTP servers timed out (IAPR-TC11) or did not resolve (Essex) on both
+> machines. Its download code is covered by fixture-based tests instead.
 
 ---
 
@@ -353,11 +361,13 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 * Everything that can be checked without full training matches the paper: the architecture, the parameter count, the
   metrics, and the data protocol for BSD300 and SET14. (ICDAR2003 could not be downloaded here, so its protocol is
   unchecked.)
-* The one configuration trained here, ×8 on BSD300, is within the "matches" threshold after only **40 of the ~300
-  epochs**. That ran on a 4-core CPU (≈ 25 min per run).
-* The full grid (×2 / ×4 / ×8 on all three datasets, 300 epochs each) was not run in the build sandbox, which is
-  CPU-only and was asked for a smoke test only. Each run is one papermill command on a GPU, and the notebook fills in
-  the comparison automatically.
+* The one configuration trained to the full 300 epochs, **UnetSR+ at ×8 on BSD300, matches the paper**: 22.043 dB /
+  0.5263 against the paper's 22.0368 / 0.5235. Its gain over bicubic is +0.70 dB, against the paper's +0.73 dB. That is
+  a single run on a laptop GPU (RTX 2070 Max-Q, 17 min).
+* After only **40 epochs**, ×8 on BSD300 is already within the "matches" threshold for both UnetSR and UnetSR+, on a
+  4-core CPU (≈ 25 min per run) and on the GPU (≈ 2–3 min per run).
+* The rest of the grid has not been run: ×2 and ×4, SET14 and ICDAR2003, and UnetSR for 300 epochs. Each run is one
+  papermill command on a GPU, and the notebook fills in the comparison automatically.
 
 | check | result | evidence |
 |---|---|---|
@@ -365,9 +375,10 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 | parameter count | ✅ 8,495,907 (×2) = paper's **8.50 M** (Table 3, Fig. 3) | notebook §4 |
 | metric implementation | ✅ SSIM identical to the repo's `pytorch_ssim` (\|Δ\| = 0) | notebook §5 |
 | data protocol (bicubic rows of Table 2) | ✅ SET14 **exact** at ×2/×4/×8; BSD300 within **0.035 dB / 0.0021 SSIM**; ⚠️ ICDAR2003 unverified | `results/bicubic_calibration.csv` |
-| pipeline runs end to end | ✅ ×2/×4/×8 × {mse, mixge, l1_ssim}, AMP, augmentation, resume (≤ 1e-8 from an uninterrupted run), SET14/ICDAR paths | papermill smoke tests |
+| pipeline runs end to end | ✅ ×2/×4/×8 × {mse, mixge, l1_ssim}, AMP, augmentation, resume (≤ 1e-8 from an uninterrupted run), SET14/ICDAR paths; on CPU and on an NVIDIA GPU (`GPU_SESSION.md` T1–T15) | papermill smoke tests |
 | learns, and approaches the paper | ✅ ×8 BSD300, 40 epochs on CPU: UnetSR+ **21.75 dB / 0.520**, UnetSR 21.74 / 0.520, against the paper's 22.04 / 0.524 and 21.99 / 0.523 (−0.29 / −0.24 dB) | table below, [`results/`](results/) |
-| full grid at the repo's 300-epoch budget (the paper does not state its epochs) | ⏳ **not run here.** Run the commands below on a GPU | `runs/summary.md` |
+| reaches the paper at the repo's 300-epoch budget (the paper does not state its epochs) | ✅ ×8 BSD300, UnetSR+, 300 epochs on a GPU: **22.043 dB / 0.5263** against 22.0368 / 0.5235 (+0.006 dB); gain over bicubic +0.70 dB against +0.73 dB; "matches" for both | [`results/gpu_x8_BSD300_300ep_mixge`](results/gpu_x8_BSD300_300ep_mixge/) |
+| full grid (×2/×4/×8 × UnetSR/UnetSR+ × 3 datasets) | ⏳ **only ×8 BSD300 UnetSR+ so far.** Run the commands below on a GPU | `runs/summary.md` |
 
 **Measured here: ×8 on BSD300, 40 epochs**, default settings otherwise (`repo_crop`, batch 1, Adam 1e-3 halved at
 epoch 25, seed 123), single run:
@@ -380,16 +391,59 @@ epoch 25, seed 123), single run:
 
 The test PSNR levelled off after epoch 30: UnetSR+ peaked at epoch 30 (21.767 dB) and UnetSR at epoch 35
 (21.776 dB), with the learning rate still at 5e-4; see
-[`results/sanity_x8_BSD300_40ep_mixge/curves.png`](results/sanity_x8_BSD300_40ep_mixge/curves.png). Whether the
-remaining ~260 epochs, with their further learning-rate halvings, close the last 0.25–0.3 dB is untested. Both runs,
+[`results/sanity_x8_BSD300_40ep_mixge/curves.png`](results/sanity_x8_BSD300_40ep_mixge/curves.png). The 300-epoch
+GPU run below shows that the remaining epochs, with their further learning-rate halvings, close the gap. Both runs,
 with their config, per-epoch history and `metrics.json`, are in [`results/`](results/). Re-run them with the commands
-below. Expect the same numbers on a CPU, up to floating-point differences between machines; a GPU differs slightly
-more.
+below. Expect the same numbers on a CPU, up to floating-point differences between machines. A GPU differs more,
+because cuDNN's autotuned kernels are not bit-reproducible. On the RTX 2070 the two commands gave 21.837 / 0.5191
+(UnetSR+) and 21.814 / 0.5196 (UnetSR), both "matches" too. The 300-epoch run below was at 21.748 dB after its first
+40 epochs, so two GPU runs with the same seed differed by 0.09 dB at that point.
 
 ```bash
 uv run papermill SimplifiedUNetSR.ipynb runs/x8_mixge_40.ipynb -p SCALE 8 -p LOSS mixge -p EPOCHS 40 -p EVAL_EVERY 5
 uv run papermill SimplifiedUNetSR.ipynb runs/x8_mse_40.ipynb -p SCALE 8 -p LOSS mse -p EPOCHS 40 -p EVAL_EVERY 5
 ```
+
+**Measured on a GPU: ×8 on BSD300, 300 epochs** (the repo's budget), UnetSR+ only, default settings otherwise, single
+run. Hardware: NVIDIA GeForce RTX 2070 with Max-Q Design (laptop, Windows 11), torch 2.14.1+cu130, float32. Training
+took 16.5 min at 3.3 s per epoch, with the test set scored every 10 epochs.
+
+| model | epochs | PSNR / SSIM | gain over bicubic | paper (Table 2) | paper gain | verdict, absolute / gain |
+|---|---|---|---|---|---|---|
+| UnetSR+ (MixGE, Sobel ÷ 8) | 300 | **22.043 / 0.5263** | +0.70 dB | 22.0368 / 0.5235 | +0.73 dB | **matches / matches** |
+| bicubic (same pairs) | — | 21.342 / 0.4951 | — | 21.3115 / 0.4933 | — | — |
+
+The test PSNR rose quickly and then flattened as the learning rate kept halving: 21.75 dB at epoch 40, 22.00 at
+epoch 100, 22.03 at 150 and 22.043 at 300. It passed the paper's value at about epoch 150 and was still rising by
+less than 0.001 dB per 10 epochs at the end
+([curves](results/gpu_x8_BSD300_300ep_mixge/curves.png)). The 0.29 dB missing after 40 epochs is therefore a matter
+of training time, not of a wrong setting.
+
+Keep the limits in mind:
+
+* This is one run, and the GPU run-to-run spread is about 0.1 dB at 40 epochs.
+* The paper states neither its number of epochs nor whether its numbers come from single runs.
+* UnetSR (MSE) was not trained for 300 epochs. At ×8 the paper puts it only 0.05 dB below UnetSR+, which is less than
+  that spread.
+
+[`examples_BSD300.png`](results/gpu_x8_BSD300_300ep_mixge/examples_BSD300.png) shows the before and after for three
+BSD300 **test** images, which the model never trained on (101085, 241004, 97033 of the official 100-image test split):
+
+* the 32×32 LR input;
+* the bicubic up-scaling ("before", blurred);
+* the model's output ("after");
+* the ground truth.
+
+The notebook's section 10 draws the same figure for every run and prints which images it used.
+
+To repeat the run:
+
+```bash
+uv run papermill SimplifiedUNetSR.ipynb runs/x8_mixge_gpu.ipynb -p SCALE 8 -p LOSS mixge -p EVAL_EVERY 10
+```
+
+It uses the same run folder, `runs/BSD300_x8_mixge`, as the 40-epoch command above. After that command it therefore
+continues from epoch 40.
 
 **To finish the comparison**, run the following from `PBL/`. On a GPU, the notebook prints an ETA after the first
 epoch.
@@ -441,7 +495,8 @@ baselines.
   there.
 * **BSD300 is the most reliable comparison.** The protocol is reproduced to 0.035 dB, and it has 100 test images. The
   paper's UnetSR → UnetSR+ gain on BSD300 is small (+0.42 / +0.12 / +0.05 dB at ×2/×4/×8), so a single run of each may
-  not separate the two. The ×8 runs above are an example: they differ by 0.003 dB.
+  not separate the two. The 40-epoch ×8 runs above are an example: they differ by 0.003 dB on the CPU and 0.023 dB on
+  the GPU.
 * **For ICDAR2003, check the protocol first.** Run `MODE=calibrate` when the data is there: the protocol is unverified,
   and the official test set has 251 images against the paper's 249.
 * **The paper leaves several things unstated**: the number of epochs (300 is the repo's example), the random seed, how
