@@ -20,9 +20,22 @@ Everything new lives in `PBL/`; the original code is not modified.
 | [`results/bicubic_calibration.csv`](results/bicubic_calibration.csv) | the needs-no-training protocol study behind §5 |
 | [`results/set14_subset_search.csv`](results/set14_subset_search.csv) | which Set14 images form the paper's SET14 test set (§3) |
 | [`GPU_SESSION.md`](GPU_SESSION.md) | checklist for the first run on a GPU machine: setup, tests and a 30-minute training run |
-| [`results/sanity_x8_BSD300_40ep_*`](results/) | the two short training runs of §7 (config, per-epoch history, metrics, curves) |
-| [`results/gpu_x8_BSD300_300ep_mixge`](results/gpu_x8_BSD300_300ep_mixge/) | the 300-epoch GPU run of §7, with before/after images of three BSD300 test images |
+| [`results/sanity_x8_BSD300_40ep_*`](results/) | the two short training runs of §7.3 (config, per-epoch history, metrics, curves) |
+| [`results/gpu_x8_BSD300_300ep_mixge`](results/gpu_x8_BSD300_300ep_mixge/) | the first 300-epoch GPU run (§7.3), with before/after images of three BSD300 test images |
 | [`results/ablation_x8_BSD300_15ep_mixge_raw`](results/ablation_x8_BSD300_15ep_mixge_raw/) | the literal-Sobel MixGE run of the §2 ablation |
+| [`results/final_results.md`](results/final_results.md) | **the final results (§7)**: Table A, ours vs the paper's Table 2; Table B, robustness to blur |
+| [`results/final/`](results/final/) | one folder per final run: config, per-epoch history, metrics, blur sweep, figures |
+
+**Feedback of 1 Oct 2026 and where it is addressed**
+
+| minute | what changed | where |
+|---|---|---|
+| 1, 2: compare the **final** results with the paper's model | the whole grid (BSD300 and SET14, ×2/×4/×8, UnetSR and UnetSR+) is trained for 300 epochs and set against the paper's Table 2. The authors published no weights, so their Table 2 is the reference | §7, Table A |
+| 3: too much down-sampling loses detail | ×2 and ×4 are trained to the end and are the main results; the notebook measures and shows what ×2 / ×4 / ×8 leave of an image | §7.2; notebook §3b |
+| 4a, 4b: training inputs too blurred; randomise the blur to prevent over-fitting | `DEGRADATION="random"`: a new Gaussian blur (σ ≤ 0.5 LR px) and a random down-sampler for every training image in every epoch. On average it is no blurrier than the paper's input | §7.2; notebook §3b |
+| 4c: apply the network to images with varied blur | the blur sweep scores every model on the test set blurred by σ = 0 … 1 LR px | §7.2, Table B |
+| 5: how others / industry apply blur | the BI, BD, DN, SRMD, BSRGAN and Real-ESRGAN degradations compared | §7.2; notebook §3b |
+| 6: fine-tune and prepare results | the 300-epoch UnetSR+ models at ×2 and ×4 are fine-tuned for 100 epochs with random blur (`FINETUNE_FROM`) | §7.2 |
 
 **Contents**
 1. [Quick start](#1-quick-start-uv)
@@ -100,7 +113,10 @@ then `pip install -r requirements.txt`.
 > torch 2.14.1+cu130; the BSD300 download from the Berkeley HTTPS host; the checklist in
 > [`GPU_SESSION.md`](GPU_SESSION.md) (training, resuming finished and interrupted runs from papermill and from a Jupyter
 > kernel, the settings check, the float32 fallback for `AMP` on a pre-Ampere GPU, hold-out, cross-dataset scores,
-> `MODE=calibrate` reproducing both committed CSVs unchanged, CPU-portable weights); and a 300-epoch ×8 run (§7).
+> `MODE=calibrate` reproducing both committed CSVs unchanged, CPU-portable weights); a 300-epoch ×8 run; and the final
+> grid of §7, with the random-blur fine-tunes and the blur sweep. On CPU, the paper path gives the same numbers as
+> before the degradation code was added (12.2555 dB in the smoke test), and a random-blur run resumed after epoch 2
+> ends exactly where an uninterrupted one does.
 >
 > **Not verified anywhere:** MPS (macOS), CUDA on Linux, the cu126 build, bf16 `AMP` on an Ampere or newer GPU, the
 > HuggingFace host, and ICDAR2003, whose plain-HTTP servers timed out (IAPR-TC11) or did not resolve (Essex) on both
@@ -279,16 +295,16 @@ Notes:
 
 ```mermaid
 flowchart LR
-  A["download_datasets.py<br/>BSD300 / SET14 / ICDAR2003<br/>pinned + SHA-256"] --> B["protocol (PROTOCOL)<br/>HR: 256x256 centre crop (repo_crop)<br/>or 224x224 resize (icdar_resize)<br/>LR: bilinear x1/s"]
+  A["download_datasets.py<br/>BSD300 / SET14 / ICDAR2003<br/>pinned + SHA-256"] --> B["protocol (PROTOCOL)<br/>HR: 256x256 centre crop (repo_crop)<br/>or 224x224 resize (icdar_resize)<br/>LR: bilinear x1/s<br/>(DEGRADATION=random: + random blur<br/>and down-sampler, per epoch)"]
   B --> C["in-memory uint8 pairs<br/>train split / test split"]
   C --> D["UNetSR(scale)<br/>x2 / x4 / x8"]
   D --> E["loss<br/>MSE (UnetSR) | MixGE (UnetSR+)<br/>| L1+SSIM (repo)"]
   E --> F["Adam 1e-3, halve every 25 epochs<br/>batch 1, 300 epochs"]
   F -->|"every epoch"| G["runs/RUN/last.pt + history.csv<br/>(resumable)"]
   F -->|"every EVAL_EVERY epochs"| H["test PSNR / SSIM<br/>(monitoring only)"]
-  G --> I["final evaluation vs paper Table 2<br/>absolute and gain over bicubic"]
+  G --> I["final evaluation vs paper Table 2<br/>absolute and gain over bicubic<br/>+ blur sweep (sigma 0 ... 1 LR px)"]
   I --> J["runs/RUN/metrics.json<br/>figures, per-image CSV"]
-  J --> K["summary of all runs<br/>runs/summary.md"]
+  J --> K["final results of all runs<br/>Table A (vs paper), Table B (blur)<br/>runs/summary.md"]
 ```
 
 ---
@@ -346,6 +362,8 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 | Sobel scale in MGE | raw ±1/±2 kernels printed; MGE described as "auxiliary" | `GraLoss` divides by 100 and 10 000 (unused) | kernels ÷ 8 (`SOBEL_NORM=True`), see §2 |
 | initialisation | not stated | PyTorch default (`weight_init` is a no-op) | PyTorch default |
 | augmentation | not stated | none | none (`AUGMENT=True` optional) |
+| degradation (LR from HR) | one fixed down-scaling | one fixed down-scaling | fixed (`DEGRADATION="fixed"`); for the robustness study, `"random"`: Gaussian blur σ ~ U[0, 0.5] LR px and a random bilinear / bicubic / box down-sampler per image and epoch (§7.2) |
+| fine-tuning | – | – | none; `FINETUNE_FROM=<run>` starts from another run's weights (§7.2: LR 1e-4, 100 epochs) |
 | hold-out set | 50 random training images, for the depth and λ<sub>G</sub> studies (§4.4.1) | none | none (`VAL_HOLDOUT=50` optional) |
 | seed | not stated | 123 (set *after* the model is built) | 123, set *before* the model is built |
 | model selection | not stated | last epoch | last epoch (test monitoring every `EVAL_EVERY` epochs) |
@@ -356,18 +374,27 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 
 ## 7 Does it perform like the paper?
 
-**Short answer:**
+**Short answer.** The final grid trains every model for 300 epochs, one run each, on an RTX 2070 Max-Q. The full tables
+are in [`results/final_results.md`](results/final_results.md).
 
-* Everything that can be checked without full training matches the paper: the architecture, the parameter count, the
-  metrics, and the data protocol for BSD300 and SET14. (ICDAR2003 could not be downloaded here, so its protocol is
-  unchecked.)
-* The one configuration trained to the full 300 epochs, **UnetSR+ at ×8 on BSD300, matches the paper**: 22.043 dB /
-  0.5263 against the paper's 22.0368 / 0.5235. Its gain over bicubic is +0.70 dB, against the paper's +0.73 dB. That is
-  a single run on a laptop GPU (RTX 2070 Max-Q, 17 min).
-* After only **40 epochs**, ×8 on BSD300 is already within the "matches" threshold for both UnetSR and UnetSR+, on a
-  4-core CPU (≈ 25 min per run) and on the GPU (≈ 2–3 min per run).
-* The rest of the grid has not been run: ×2 and ×4, SET14 and ICDAR2003, and UnetSR for 300 epochs. Each run is one
-  papermill command on a GPU, and the notebook fills in the comparison automatically.
+* **BSD300 is the reliable comparison**: 100 test images, and a protocol reproduced to 0.035 dB.
+  * ×8 matches the paper for both models (+0.04 and +0.01 dB).
+  * At ×4 and ×2 our models are 0.25–0.78 dB below the paper: "matches" for UnetSR at ×4, "close" for the other three.
+* **MixGE does not help here.** At every scale, UnetSR+ and UnetSR end within 0.03 dB of each other. The paper reports
+  UnetSR+ ahead by +0.42 / +0.12 / +0.05 dB at ×2 / ×4 / ×8. Most of our shortfall at ×2 and ×4 is that missing
+  MixGE gain.
+* **SET14: the paper's models were not trained on 11 images.**
+  * Trained on the 11 other Set14 images, our models stay at or below bicubic. At batch size 1 and 300 epochs, that is
+    only 3,300 updates.
+  * The BSD300-trained models, scored on the same 3 test images, reach or beat the paper's SET14 numbers at ×2 and ×4,
+    e.g. 28.92 dB against 28.40 for UnetSR+ at ×2.
+* **Training longer would not close the gaps.** Every run's test PSNR rose by less than 0.01 dB after epoch 200, and
+  none over-fits the clean test set: each one peaks at its last epoch.
+* **Blur (minutes 3–6 of the 1 Oct meeting, §7.2).**
+  * The paper-protocol models lose most of their advantage over bicubic as the input gets blurrier.
+  * Fine-tuning with random blur wins back part of it at ×2: +0.2 to +0.3 dB on blurred inputs, at a cost of 0.15 dB on
+    the paper's test set.
+  * At ×4 the effect stays within 0.1 dB.
 
 | check | result | evidence |
 |---|---|---|
@@ -375,133 +402,191 @@ which variant reproduces the paper's ICDAR2003 bicubic row.
 | parameter count | ✅ 8,495,907 (×2) = paper's **8.50 M** (Table 3, Fig. 3) | notebook §4 |
 | metric implementation | ✅ SSIM identical to the repo's `pytorch_ssim` (\|Δ\| = 0) | notebook §5 |
 | data protocol (bicubic rows of Table 2) | ✅ SET14 **exact** at ×2/×4/×8; BSD300 within **0.035 dB / 0.0021 SSIM**; ⚠️ ICDAR2003 unverified | `results/bicubic_calibration.csv` |
-| pipeline runs end to end | ✅ ×2/×4/×8 × {mse, mixge, l1_ssim}, AMP, augmentation, resume (≤ 1e-8 from an uninterrupted run), SET14/ICDAR paths; on CPU and on an NVIDIA GPU (`GPU_SESSION.md` T1–T15) | papermill smoke tests |
-| learns, and approaches the paper | ✅ ×8 BSD300, 40 epochs on CPU: UnetSR+ **21.75 dB / 0.520**, UnetSR 21.74 / 0.520, against the paper's 22.04 / 0.524 and 21.99 / 0.523 (−0.29 / −0.24 dB) | table below, [`results/`](results/) |
-| reaches the paper at the repo's 300-epoch budget (the paper does not state its epochs) | ✅ ×8 BSD300, UnetSR+, 300 epochs on a GPU: **22.043 dB / 0.5263** against 22.0368 / 0.5235 (+0.006 dB); gain over bicubic +0.70 dB against +0.73 dB; "matches" for both | [`results/gpu_x8_BSD300_300ep_mixge`](results/gpu_x8_BSD300_300ep_mixge/) |
-| full grid (×2/×4/×8 × UnetSR/UnetSR+ × 3 datasets) | ⏳ **only ×8 BSD300 UnetSR+ so far.** Run the commands below on a GPU | `runs/summary.md` |
+| pipeline runs end to end | ✅ ×2/×4/×8 × {mse, mixge, l1_ssim}, AMP, augmentation, resume (≤ 1e-8 from an uninterrupted run, also with random blur), SET14/ICDAR paths; on CPU and on an NVIDIA GPU (`GPU_SESSION.md` T1–T15) | papermill smoke tests |
+| final results, BSD300 (300 epochs) | ✅ ×8 matches (both models); ×4 UnetSR matches; ×4 UnetSR+ and ×2 close (−0.38 to −0.78 dB) | Table A |
+| final results, SET14 | ⚠️ trained on its 11 other images: well below the paper. Trained on BSD300: at or above it at ×2/×4 | Table A |
+| robustness to blur, random-blur fine-tuning | ✅ the sweep shows the fixed-degradation weakness; fine-tuning helps at ×2, barely at ×4 | Table B |
+| ICDAR2003 | ⏳ not run: its plain-HTTP servers could not be reached | §3 |
 
-**Measured here: ×8 on BSD300, 40 epochs**, default settings otherwise (`repo_crop`, batch 1, Adam 1e-3 halved at
-epoch 25, seed 123), single run:
+### 7.1 Final results vs the paper (Table A)
 
-| model | PSNR / SSIM | gain over bicubic | paper (Table 2) | paper gain | verdict, absolute / gain |
-|---|---|---|---|---|---|
-| UnetSR+ (MixGE, Sobel ÷ 8) | 21.746 / 0.5201 | +0.40 dB | 22.0368 / 0.5235 | +0.73 dB | matches / close |
-| UnetSR (MSE) | 21.742 / 0.5195 | +0.40 dB | 21.9865 / 0.5231 | +0.68 dB | matches / matches |
-| bicubic (same pairs) | 21.342 / 0.4951 | — | 21.3115 / 0.4933 | — | — |
+PSNR [dB] / SSIM on RGB, with the paper's protocol (§5), at the last epoch of a single 300-epoch run. Δ = ours − paper,
+with the verdict below. The column "BSD300-trained" scores the BSD300 models on the SET14 test images, which the
+paper does not do.
 
-The test PSNR levelled off after epoch 30: UnetSR+ peaked at epoch 30 (21.767 dB) and UnetSR at epoch 35
-(21.776 dB), with the learning rate still at 5e-4; see
-[`results/sanity_x8_BSD300_40ep_mixge/curves.png`](results/sanity_x8_BSD300_40ep_mixge/curves.png). The 300-epoch
-GPU run below shows that the remaining epochs, with their further learning-rate halvings, close the gap. Both runs,
-with their config, per-epoch history and `metrics.json`, are in [`results/`](results/). Re-run them with the commands
-below. Expect the same numbers on a CPU, up to floating-point differences between machines. A GPU differs more,
-because cuDNN's autotuned kernels are not bit-reproducible. On the RTX 2070 the two commands gave 21.837 / 0.5191
-(UnetSR+) and 21.814 / 0.5196 (UnetSR), both "matches" too. The 300-epoch run below was at 21.748 dB after its first
-40 epochs, so two GPU runs with the same seed differed by 0.09 dB at that point.
+| dataset | scale | bicubic paper | bicubic ours | UnetSR paper | UnetSR ours | UnetSR Δ dB | UnetSR+ paper | UnetSR+ ours | UnetSR+ Δ dB | UnetSR / UnetSR+ ours, BSD300-trained | best other method (paper) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| BSD300 | x2 | 26.65 / 0.7924 | 26.68 / 0.7938 | 29.42 / 0.8813 | 29.04 / 0.8726 (300 ep) | -0.38 (close) | 29.84 / 0.8816 | 29.06 / 0.8735 (300 ep) | -0.78 (close) | - | DBPN 29.87 / 0.8834 |
+| BSD300 | x4 | 23.51 / 0.6157 | 23.54 / 0.6178 | 24.83 / 0.6843 | 24.58 / 0.6755 (300 ep) | -0.25 (matches) | 24.95 / 0.6901 | 24.55 / 0.6753 (300 ep) | -0.40 (close) | - | DBPN 25.06 / 0.6967 |
+| BSD300 | x8 | 21.31 / 0.4933 | 21.34 / 0.4951 | 21.99 / 0.5231 | 22.03 / 0.5255 (300 ep) | +0.04 (matches) | 22.04 / 0.5235 | 22.04 / 0.5263 (300 ep) | +0.01 (matches) | - | DBPN 22.06 / 0.5229 |
+| SET14 | x2 | 24.45 / 0.8482 | 24.45 / 0.8482 | 26.72 / 0.8735 | 24.51 / 0.8441 (300 ep) | -2.21 (differs) | 28.40 / 0.9198 | 24.43 / 0.8413 (300 ep) | -3.96 (differs) | 28.84 / 28.92 | VDSR 28.66 / 0.9269 |
+| SET14 | x4 | 19.72 / 0.6089 | 19.72 / 0.6089 | 20.89 / 0.6693 | 18.55 / 0.5826 (300 ep) | -2.34 (differs) | 21.68 / 0.7112 | 18.57 / 0.5819 (300 ep) | -3.11 (differs) | 21.96 / 21.87 | DBPN 21.77 / 0.7171 |
+| SET14 | x8 | 16.11 / 0.3673 | 16.11 / 0.3673 | 16.70 / 0.4093 | 16.23 / 0.3727 (300 ep) | -0.47 (close) | 17.83 / 0.4103 | 16.08 / 0.3689 (300 ep) | -1.75 (differs) | 17.10 / 17.12 | VDSR 16.80 / 0.4095 |
 
-```bash
-uv run papermill SimplifiedUNetSR.ipynb runs/x8_mixge_40.ipynb -p SCALE 8 -p LOSS mixge -p EPOCHS 40 -p EVAL_EVERY 5
-uv run papermill SimplifiedUNetSR.ipynb runs/x8_mse_40.ipynb -p SCALE 8 -p LOSS mse -p EPOCHS 40 -p EVAL_EVERY 5
-```
-
-**Measured on a GPU: ×8 on BSD300, 300 epochs** (the repo's budget), UnetSR+ only, default settings otherwise, single
-run. Hardware: NVIDIA GeForce RTX 2070 with Max-Q Design (laptop, Windows 11), torch 2.14.1+cu130, float32. Training
-took 16.5 min at 3.3 s per epoch, with the test set scored every 10 epochs.
-
-| model | epochs | PSNR / SSIM | gain over bicubic | paper (Table 2) | paper gain | verdict, absolute / gain |
-|---|---|---|---|---|---|---|
-| UnetSR+ (MixGE, Sobel ÷ 8) | 300 | **22.043 / 0.5263** | +0.70 dB | 22.0368 / 0.5235 | +0.73 dB | **matches / matches** |
-| bicubic (same pairs) | — | 21.342 / 0.4951 | — | 21.3115 / 0.4933 | — | — |
-
-The test PSNR rose quickly and then flattened as the learning rate kept halving: 21.75 dB at epoch 40, 22.00 at
-epoch 100, 22.03 at 150 and 22.043 at 300. It passed the paper's value at about epoch 150 and was still rising by
-less than 0.001 dB per 10 epochs at the end
-([curves](results/gpu_x8_BSD300_300ep_mixge/curves.png)). The 0.29 dB missing after 40 epochs is therefore a matter
-of training time, not of a wrong setting.
-
-Keep the limits in mind:
-
-* This is one run, and the GPU run-to-run spread is about 0.1 dB at 40 epochs.
-* The paper states neither its number of epochs nor whether its numbers come from single runs.
-* UnetSR (MSE) was not trained for 300 epochs. At ×8 the paper puts it only 0.05 dB below UnetSR+, which is less than
-  that spread.
-
-[`examples_BSD300.png`](results/gpu_x8_BSD300_300ep_mixge/examples_BSD300.png) shows the before and after for three
-BSD300 **test** images, which the model never trained on (101085, 241004, 97033 of the official 100-image test split):
-
-* the 32×32 LR input;
-* the bicubic up-scaling ("before", blurred);
-* the model's output ("after");
-* the ground truth.
-
-The notebook's section 10 draws the same figure for every run and prints which images it used.
-
-To repeat the run:
-
-```bash
-uv run papermill SimplifiedUNetSR.ipynb runs/x8_mixge_gpu.ipynb -p SCALE 8 -p LOSS mixge -p EVAL_EVERY 10
-```
-
-It uses the same run folder, `runs/BSD300_x8_mixge`, as the 40-epoch command above. After that command it therefore
-continues from epoch 40.
-
-**To finish the comparison**, run the following from `PBL/`. On a GPU, the notebook prints an ETA after the first
-epoch.
-
-```bash
-# bash / zsh (Linux, macOS, WSL)
-for s in 2 4 8; do for l in mse mixge; do for d in BSD300 SET14 ICDAR2003; do
-  uv run papermill SimplifiedUNetSR.ipynb runs/${d}_x${s}_${l}.ipynb -p DATASET $d -p SCALE $s -p LOSS $l
-done; done; done
-uv run papermill SimplifiedUNetSR.ipynb runs/summary.ipynb -p MODE calibrate   # also writes the protocol study
-```
-
-```powershell
-# Windows PowerShell
-foreach ($s in 2,4,8) { foreach ($l in 'mse','mixge') { foreach ($d in 'BSD300','SET14','ICDAR2003') {
-  uv run papermill SimplifiedUNetSR.ipynb "runs/${d}_x${s}_${l}.ipynb" -p DATASET $d -p SCALE $s -p LOSS $l } } }
-uv run papermill SimplifiedUNetSR.ipynb runs/summary.ipynb -p MODE calibrate
-```
-
-Each run writes `runs/<name>/metrics.json` with the absolute difference to the paper and the **gain over bicubic**
-compared with the paper's gain. Each comparison with the matching paper row gets a verdict with thresholds fixed in
-advance (test sets of other datasets, `SET14_ALL` and the hold-out set are scored but get none):
+Each run writes `runs/<name>/metrics.json` with the difference to the paper, in absolute terms and as **gain over
+bicubic** against the paper's gain. Every comparison with the matching paper row gets a verdict, with thresholds fixed
+in advance. Test sets of other datasets, `SET14_ALL` and the hold-out set are scored, but get no verdict.
 
 * **matches**: |ΔPSNR| ≤ 0.3 dB and |ΔSSIM| ≤ 0.01;
 * **close**: |ΔPSNR| ≤ 1 dB;
 * **differs**: anything else.
 
-Section 12 of the notebook collects all runs into `runs/summary.md`.
-
-**The targets** (paper Table 2, PSNR dB / SSIM, RGB). The notebook contains all 33 rows, including the eight
-baselines.
-
-| dataset | scale | Bicubic | UnetSR (MSE) | UnetSR+ (MixGE) | best baseline |
-|---|---|---|---|---|---|
-| SET14 (3 imgs) | ×2 | 24.4523 / 0.8482 | 26.7241 / 0.8735 | 28.3965 / 0.9198 | VDSR 28.6617 / 0.9269 |
-| SET14 | ×4 | 19.7167 / 0.6089 | 20.8891 / 0.6693 | 21.6825 / 0.7112 | DBPN 21.7657 / 0.7171 |
-| SET14 | ×8 | 16.1132 / 0.3673 | 16.7001 / 0.4093 | **17.8289** / 0.4103 | VDSR 16.7994 / 0.4095 |
-| BSD300 | ×2 | 26.6538 / 0.7924 | 29.4241 / 0.8813 | 29.8403 / 0.8816 | DBPN 29.8675 / 0.8834 |
-| BSD300 | ×4 | 23.5053 / 0.6157 | 24.8332 / 0.6843 | 24.9522 / 0.6901 | DBPN 25.0644 / 0.6967 |
-| BSD300 | ×8 | 21.3115 / 0.4933 | 21.9865 / 0.5231 | 22.0368 / 0.5235 | DBPN 22.0577 / 0.5229 |
-| ICDAR2003 | ×2 | 32.9327 / 0.9028 | 35.7147 / 0.9388 | **37.3673** / 0.9675 | DBPN 36.2344 / 0.9401 |
-| ICDAR2003 | ×4 | 28.1135 / 0.7875 | 29.3374 / 0.8202 | **31.8966** / 0.8898 | VDSR 30.5267 / 0.8321 |
-| ICDAR2003 | ×8 | 24.3856 / 0.6831 | 25.7734 / 0.7106 | **28.2512** / 0.8101 | DBPN 26.3482 / 0.7196 |
+Section 12 of the notebook collects the final runs into `runs/summary.md` (Tables A and B). The notebook also holds all
+33 rows of the paper's Table 2, including the ICDAR2003 targets and the eight baselines.
 
 **What to keep in mind when you compare:**
 
-* **SET14 numbers are very noisy.** By our analysis they are means over only **3 test images**, from models that
-  presumably learned from the other **11 images**. Some of the paper's own baselines (EDSR, FSRCNN, SRGAN at ×2) score *below* bicubic
-  there.
-* **BSD300 is the most reliable comparison.** The protocol is reproduced to 0.035 dB, and it has 100 test images. The
-  paper's UnetSR → UnetSR+ gain on BSD300 is small (+0.42 / +0.12 / +0.05 dB at ×2/×4/×8), so a single run of each may
-  not separate the two. The 40-epoch ×8 runs above are an example: they differ by 0.003 dB on the CPU and 0.023 dB on
-  the GPU.
-* **For ICDAR2003, check the protocol first.** Run `MODE=calibrate` when the data is there: the protocol is unverified,
-  and the official test set has 251 images against the paper's 249.
+* **BSD300 is the most reliable comparison.** The protocol is reproduced to 0.035 dB, and it has 100 test images.
+* **These are single runs.** On the GPU, two runs with the same seed differed by about 0.1 dB after 40 epochs. That is
+  as large as the UnetSR → UnetSR+ gain the paper reports at ×4 and ×8.
+* **SET14 numbers are very noisy.** By our analysis they are means over only **3 test images**. Some of the paper's own
+  baselines (EDSR, FSRCNN, SRGAN at ×2) score *below* bicubic there. The paper does not say what its SET14 models were
+  trained on; the BSD300-trained column suggests a set much larger than 11 images.
+* **For ICDAR2003, check the protocol first.** Run `MODE=calibrate` when the data is there: the protocol is
+  unverified, and the official test set has 251 images against the paper's 249.
 * **The paper leaves several things unstated**: the number of epochs (300 is the repo's example), the random seed, how
-  the baselines were trained, and whether results are from a single run. Differences of a few tenths of a dB are within
-  what the paper lets anyone reproduce.
+  the baselines were trained, and whether its results come from single runs.
+
+### 7.2 Blur, randomised degradation and fine-tuning (meeting of 1 Oct, minutes 3–6)
+
+**Every down-scaling already blurs.** Pillow's bilinear filter is anti-aliased. At ×s it acts much like a Gaussian
+blur of σ ≈ 0.41·s HR pixels: 0.8 at ×2, 1.6 at ×4, 3.3 at ×8. A ×8 input keeps 1/64 of the pixels, and what it has
+lost is hard to recover, so ×2 and ×4 are the main results. The paper trains with this one fixed degradation, so its
+networks learn to undo exactly that blur and nothing else.
+
+**How others degrade images.** SR papers write the LR image as y = (x ⊗ k)↓s + n: the HR image x is blurred by a
+kernel k, down-sampled by s and, optionally, gets noise n.
+
+| setting | blur kernel k | down-sampler | noise, compression |
+|---|---|---|---|
+| **BI** (standard benchmarks: Set5, Set14, B100, Urban100, Manga109) | none beyond the resize filter | MATLAB `imresize`, bicubic | – |
+| **BD** ([RDN](https://arxiv.org/abs/1802.08797), CVPR 2018) | 7×7 Gaussian, σ = 1.6 HR px | ×3 | – |
+| **DN** (RDN) | – | bicubic ×3 | Gaussian, level 30 |
+| **[SRMD](https://arxiv.org/abs/1712.06116)** (CVPR 2018) | isotropic Gaussian, width in [0.2, 2] / [0.2, 3] / [0.2, 4] HR px at ×2 / ×3 / ×4, plus anisotropic kernels | bicubic | Gaussian |
+| **[BSRGAN](https://arxiv.org/abs/2103.14006)** (ICCV 2021) | isotropic and anisotropic Gaussian, applied twice | nearest, bilinear or bicubic | Gaussian, JPEG, camera-sensor noise; the order is shuffled at random |
+| **[Real-ESRGAN](https://arxiv.org/abs/2107.10833)** (ICCVW 2021) | Gaussian, generalised-Gaussian or plateau kernels of 7–21 px, σ ∈ [0.2, 3], then [0.2, 1.5]; sinc filters | area, bilinear or bicubic | Gaussian or Poisson noise, JPEG quality 30–95; the whole chain is applied twice |
+
+The common idea: draw a new degradation for every training sample, so that the network cannot over-fit to one
+kernel.
+
+**What the notebook does** (`DEGRADATION="random"`, notebook §3b), in the spirit of SRMD but milder, as the meeting
+asked:
+
+* In every epoch, every training image gets an isotropic Gaussian blur with σ drawn uniformly from [0, 0.5] LR pixels.
+* It is then down-scaled by a random filter: bilinear, bicubic or box.
+* Noise and JPEG are left out.
+
+The table shows why 0.5 LR px. It gives the PSNR of the bicubic-upscaled LR input against the ground truth, as a mean
+over 40 BSD300 training images; lower means more detail lost.
+
+| input | ×2 | ×4 | ×8 |
+|---|---|---|---|
+| paper input (bilinear, σ = 0) | 26.83 | 23.61 | 21.43 |
+| + blur 0.25 LR px | 26.45 | 23.34 | 21.23 |
+| **+ blur 0.5 LR px** (the maximum used) | **25.35** | **22.69** | **20.72** |
+| + blur 1.0 LR px (SRMD's range) | 23.52 | 21.38 | 19.62 |
+| bicubic or box filter instead of bilinear, σ = 0 | 27.7–27.9 | 24.0 | 21.7 |
+
+* At 1 LR px, a ×4 input is as poor as the paper's ×8 input: 21.38 against 21.43 dB.
+* At 0.5 LR px the worst case is 0.9 dB (×4) or 1.5 dB (×2) below the paper's input.
+* Because bicubic and box are sharper than bilinear, the training mix as a whole is about as blurred as the paper's
+  input. It varies the blur rather than adding more of it.
+
+[`degradation_preview.png`](results/final/degradation_preview.png) shows the inputs.
+
+**Fine-tuning.** The 300-epoch UnetSR+ models at ×2 and ×4 were fine-tuned with random blur for 100 epochs, at a
+learning rate of 1e-4 halved every 25 epochs (`FINETUNE_FROM`). Every final model was then scored on the **blur
+sweep**: the BSD300 test split, blurred by σ = 0 … 1 LR px before the down-scaling. σ = 0 is the paper's test set;
+0.75 and 1.0 lie beyond the training range.
+
+**Table B: PSNR [dB] on the blur sweep** (σ in LR pixels):
+
+| dataset | scale | model | run | σ=0 | σ=0.25 | σ=0.5 | σ=0.75 | σ=1 |
+|---|---|---|---|---|---|---|---|---|
+| BSD300 | x2 | bicubic | - | 26.68 | 26.31 | 25.25 | 24.26 | 23.45 |
+| BSD300 | x2 | UnetSR, fixed degradation | BSD300_x2_mse | 29.04 | 28.80 | 26.85 | 25.01 | 23.82 |
+| BSD300 | x2 | UnetSR+, fixed degradation | BSD300_x2_mixge | 29.06 | 28.82 | 26.87 | 25.03 | 23.83 |
+| BSD300 | x2 | UnetSR+, random blur, fine-tuned | BSD300_x2_mixge_rand_ft_lr0.0001 | 28.90 | 28.68 | 27.11 | 25.31 | 24.01 |
+| BSD300 | x4 | bicubic | - | 23.54 | 23.27 | 22.62 | 21.91 | 21.29 |
+| BSD300 | x4 | UnetSR, fixed degradation | BSD300_x4_mse | 24.58 | 24.43 | 23.52 | 22.41 | 21.56 |
+| BSD300 | x4 | UnetSR+, fixed degradation | BSD300_x4_mixge | 24.55 | 24.42 | 23.53 | 22.43 | 21.57 |
+| BSD300 | x4 | UnetSR+, random blur, fine-tuned | BSD300_x4_mixge_rand_ft_lr0.0001 | 24.55 | 24.40 | 23.60 | 22.52 | 21.63 |
+| BSD300 | x8 | bicubic | - | 21.34 | 21.13 | 20.60 | 20.00 | 19.45 |
+| BSD300 | x8 | UnetSR, fixed degradation | BSD300_x8_mse | 22.03 | 21.92 | 21.24 | 20.37 | 19.66 |
+| BSD300 | x8 | UnetSR+, fixed degradation | BSD300_x8_mixge_300ep_gpu | 22.04 | 21.95 | 21.28 | 20.40 | 19.68 |
+| SET14 | x2 | bicubic | - | 24.45 | 23.89 | 22.29 | 20.75 | 19.48 |
+| SET14 | x2 | UnetSR, fixed degradation | SET14_x2_mse | 24.51 | 24.23 | 23.01 | 21.42 | 19.96 |
+| SET14 | x2 | UnetSR+, fixed degradation | SET14_x2_mixge | 24.43 | 24.17 | 22.99 | 21.45 | 20.02 |
+| SET14 | x4 | bicubic | - | 19.72 | 19.25 | 18.17 | 17.04 | 16.12 |
+| SET14 | x4 | UnetSR, fixed degradation | SET14_x4_mse | 18.55 | 18.36 | 17.73 | 16.79 | 15.88 |
+| SET14 | x4 | UnetSR+, fixed degradation | SET14_x4_mixge | 18.57 | 18.38 | 17.75 | 16.81 | 15.90 |
+| SET14 | x8 | bicubic | - | 16.11 | 15.84 | 15.22 | 14.59 | 14.12 |
+| SET14 | x8 | UnetSR, fixed degradation | SET14_x8_mse | 16.23 | 16.08 | 15.52 | 14.81 | 14.23 |
+| SET14 | x8 | UnetSR+, fixed degradation | SET14_x8_mixge | 16.08 | 15.92 | 15.36 | 14.67 | 14.11 |
+
+* **The fixed-degradation models over-fit to their one degradation.**
+  * As the blur grows, their gain over bicubic shrinks: UnetSR+ goes from +2.38 to +0.38 dB at ×2, +1.01 to +0.28 dB
+    at ×4, and +0.70 to +0.23 dB at ×8, between σ = 0 and σ = 1.
+  * UnetSR behaves the same.
+* **×2, fine-tuned:**
+  * vs the model it started from: +0.24 / +0.28 / +0.18 dB at σ = 0.5 / 0.75 / 1.0, and −0.15 dB on the paper's
+    test set;
+  * a likely cause of the clean-test cost (not tested): the bicubic and box filters in the training mix are sharper
+    than the test's bilinear, so the model now hedges between them.
+* **×4, fine-tuned:** within 0.1 dB of the model it started from everywhere: −0.01 dB at σ = 0 and 0.25, +0.07 / +0.09 / +0.06 dB
+  at σ = 0.5 / 0.75 / 1.0. At a learning rate of 1e-4 the ×4 model hardly moves. It also has less to work with: a
+  ×4 input carries a quarter of the pixels of a ×2 input.
+* **Next experiments.** A stronger fine-tune (a higher learning rate) or 300 epochs of random blur from scratch
+  (notebook §13).
+* **Figures:**
+  * [`summary_blur.png`](results/final/summary_blur.png) plots every curve;
+  * [`blur_examples.png`](results/final/BSD300_x4_mixge_rand_ft_lr0.0001/figures/blur_examples.png) shows one test
+    image at σ = 0, 0.5 and 1.0, before and after fine-tuning.
+
+### 7.3 How the results developed
+
+* **40 epochs, ×8, CPU.** UnetSR+ reached 21.746 dB / 0.5201 and UnetSR 21.742 / 0.5195 (bicubic 21.342), both
+  "matches". The runs are in [`results/sanity_x8_BSD300_40ep_*`](results/), and the same commands on the RTX 2070 gave
+  21.837 and 21.814.
+* **300 epochs, ×8 UnetSR+, GPU.** 22.043 dB / 0.5263 in 16.5 min. The test PSNR rose fast and then flattened as the
+  learning rate kept halving: 21.75 dB at epoch 40, 22.00 at 100, 22.03 at 150, 22.043 at 300
+  ([`results/gpu_x8_BSD300_300ep_mixge`](results/gpu_x8_BSD300_300ep_mixge/), with before/after images of three
+  BSD300 test images).
+* **The final grid** (§7.1) took about 2 h on the same GPU:
+  * 15–18 min of training per BSD300 model at every scale;
+  * under a minute per SET14 model;
+  * 6–7 min per 100-epoch fine-tune. Each run's config, history, metrics, blur sweep and curves are in
+  [`results/final/`](results/final/).
+
+### 7.4 Re-running the final grid
+
+From `PBL/`, about 2 h on an RTX 2070. The ×8 UnetSR+ model of the final grid is in `runs/BSD300_x8_mixge_300ep_gpu`;
+the loop below trains the same configuration as `runs/BSD300_x8_mixge`.
+
+```bash
+# bash / zsh (Linux, macOS, WSL)
+for s in 2 4 8; do for l in mse mixge; do
+  uv run papermill SimplifiedUNetSR.ipynb runs/BSD300_x${s}_${l}.ipynb -p SCALE $s -p LOSS $l -p EVAL_SETS "BSD300,SET14" -p EVAL_EVERY 10
+  uv run papermill SimplifiedUNetSR.ipynb runs/SET14_x${s}_${l}.ipynb -p DATASET SET14 -p SCALE $s -p LOSS $l -p EVAL_EVERY 10
+done; done
+for s in 2 4; do
+  uv run papermill SimplifiedUNetSR.ipynb runs/BSD300_x${s}_ft.ipynb -p SCALE $s -p LOSS mixge -p DEGRADATION random \
+    -p FINETUNE_FROM BSD300_x${s}_mixge -p LR 1e-4 -p EPOCHS 100 -p EVAL_EVERY 5
+done
+```
+
+```powershell
+# Windows PowerShell
+foreach ($s in 2,4,8) { foreach ($l in 'mse','mixge') {
+  uv run papermill SimplifiedUNetSR.ipynb "runs/BSD300_x${s}_${l}.ipynb" -p SCALE $s -p LOSS $l -p EVAL_SETS "BSD300,SET14" -p EVAL_EVERY 10
+  uv run papermill SimplifiedUNetSR.ipynb "runs/SET14_x${s}_${l}.ipynb" -p DATASET SET14 -p SCALE $s -p LOSS $l -p EVAL_EVERY 10 } }
+foreach ($s in 2,4) {
+  uv run papermill SimplifiedUNetSR.ipynb "runs/BSD300_x${s}_ft.ipynb" -p SCALE $s -p LOSS mixge -p DEGRADATION random `
+    -p FINETUNE_FROM "BSD300_x${s}_mixge" -p LR 1e-4 -p EPOCHS 100 -p EVAL_EVERY 5 }
+```
+
+On the GPU, the notebook prints an ETA after the first epoch. ICDAR2003 runs the same way with `-p DATASET ICDAR2003`
+once it is downloaded (§3).
 
 ---
 

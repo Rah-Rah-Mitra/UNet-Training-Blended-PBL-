@@ -1,0 +1,42 @@
+{
+ "DATASET": "BSD300",
+ "SCALE": 4,
+ "LOSS": "mixge",
+ "LAMBDA_G": 0.1,
+ "SOBEL_NORM": true,
+ "EPOCHS": 100,
+ "BATCH_SIZE": 1,
+ "LR": 0.0001,
+ "LR_STEP": 25,
+ "LR_GAMMA": 0.5,
+ "WEIGHT_DECAY": 1e-06,
+ "AUGMENT": false,
+ "PROTOCOL": "repo_crop",
+ "HR_SIZE": 256,
+ "HR_MODE": "crop",
+ "LR_FILTER": "bilinear",
+ "EVAL_SETS": [
+  "BSD300"
+ ],
+ "EVAL_EVERY": 5,
+ "VAL_HOLDOUT": 0,
+ "SEED": 123,
+ "AMP": false,
+ "SMOKE_TEST": false,
+ "MODE": "train",
+ "RUN_NAME": "BSD300_x4_mixge_rand_ft_lr0.0001",
+ "DEVICE": "cuda",
+ "DEGRADATION": "random",
+ "BLUR_MAX": 0.5,
+ "BLUR_TEST": [
+  0.0,
+  0.25,
+  0.5,
+  0.75,
+  1.0
+ ],
+ "FINETUNE_FROM": "BSD300_x4_mixge",
+ "EVALUATED_SETS": [
+  "BSD300"
+ ]
+}

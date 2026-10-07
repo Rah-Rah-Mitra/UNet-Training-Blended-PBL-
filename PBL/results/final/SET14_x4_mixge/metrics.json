@@ -1,0 +1,148 @@
+{
+ "config": {
+  "DATASET": "SET14",
+  "SCALE": 4,
+  "LOSS": "mixge",
+  "LAMBDA_G": 0.1,
+  "SOBEL_NORM": true,
+  "EPOCHS": 300,
+  "BATCH_SIZE": 1,
+  "LR": 0.001,
+  "LR_STEP": 25,
+  "LR_GAMMA": 0.5,
+  "WEIGHT_DECAY": 1e-06,
+  "AUGMENT": false,
+  "PROTOCOL": "repo_crop",
+  "HR_SIZE": 256,
+  "HR_MODE": "crop",
+  "LR_FILTER": "bilinear",
+  "EVAL_SETS": [
+   "SET14"
+  ],
+  "EVAL_EVERY": 10,
+  "VAL_HOLDOUT": 0,
+  "SEED": 123,
+  "AMP": false,
+  "SMOKE_TEST": false,
+  "MODE": "train",
+  "RUN_NAME": "SET14_x4_mixge",
+  "DEVICE": "cuda",
+  "DEGRADATION": "fixed",
+  "BLUR_MAX": 0.5,
+  "BLUR_TEST": [
+   0.0,
+   0.25,
+   0.5,
+   0.75,
+   1.0
+  ],
+  "FINETUNE_FROM": null,
+  "EVALUATED_SETS": [
+   "SET14"
+  ]
+ },
+ "results": {
+  "SET14": {
+   "set": "SET14",
+   "images": 3,
+   "psnr": 18.574453989664715,
+   "ssim": 0.5819364984830221,
+   "psnr_y": 21.3593266805013,
+   "ssim_y": 0.6322457194328308,
+   "bicubic_psnr": 19.71670150756836,
+   "bicubic_ssim": 0.6088839968045553,
+   "paper_method": "UnetSR+",
+   "paper_psnr": 21.6825,
+   "paper_ssim": 0.7112,
+   "paper_bicubic_psnr": 19.7167,
+   "paper_bicubic_ssim": 0.6089,
+   "d_psnr": -3.1080460103352863,
+   "d_ssim": -0.12926350151697796,
+   "gain_psnr": -1.1422475179036446,
+   "paper_gain_psnr": 1.9658000000000015,
+   "d_gain_psnr": -3.108047517903646,
+   "verdict_absolute": "differs",
+   "verdict_gain": "differs",
+   "protocol": "repo_crop"
+  }
+ },
+ "blur_sweep": [
+  {
+   "sigma_lr": 0.0,
+   "sigma_hr": 0.0,
+   "model": "bicubic",
+   "psnr": 19.71670150756836,
+   "ssim": 0.6088839968045553
+  },
+  {
+   "sigma_lr": 0.0,
+   "sigma_hr": 0.0,
+   "model": "ours",
+   "psnr": 18.574453989664715,
+   "ssim": 0.5819364984830221
+  },
+  {
+   "sigma_lr": 0.25,
+   "sigma_hr": 1.0,
+   "model": "bicubic",
+   "psnr": 19.253076553344727,
+   "ssim": 0.580113152662913
+  },
+  {
+   "sigma_lr": 0.25,
+   "sigma_hr": 1.0,
+   "model": "ours",
+   "psnr": 18.381874084472656,
+   "ssim": 0.5658812522888184
+  },
+  {
+   "sigma_lr": 0.5,
+   "sigma_hr": 2.0,
+   "model": "bicubic",
+   "psnr": 18.172168731689453,
+   "ssim": 0.5101871689160665
+  },
+  {
+   "sigma_lr": 0.5,
+   "sigma_hr": 2.0,
+   "model": "ours",
+   "psnr": 17.748369216918945,
+   "ssim": 0.518412450949351
+  },
+  {
+   "sigma_lr": 0.75,
+   "sigma_hr": 3.0,
+   "model": "bicubic",
+   "psnr": 17.037806193033855,
+   "ssim": 0.43366773923238117
+  },
+  {
+   "sigma_lr": 0.75,
+   "sigma_hr": 3.0,
+   "model": "ours",
+   "psnr": 16.806426366170246,
+   "ssim": 0.451320081949234
+  },
+  {
+   "sigma_lr": 1.0,
+   "sigma_hr": 4.0,
+   "model": "bicubic",
+   "psnr": 16.122676213582356,
+   "ssim": 0.37254540125528973
+  },
+  {
+   "sigma_lr": 1.0,
+   "sigma_hr": 4.0,
+   "model": "ours",
+   "psnr": 15.89795970916748,
+   "ssim": 0.38682758808135986
+  }
+ ],
+ "epochs_trained": 300,
+ "train_seconds": 52.26491713523865,
+ "environment": {
+  "torch": "2.14.1+cu130",
+  "device": "cuda",
+  "gpu": "NVIDIA GeForce RTX 2070 with Max-Q Design"
+ }
+}
