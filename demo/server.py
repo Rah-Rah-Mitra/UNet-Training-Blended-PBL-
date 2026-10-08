@@ -27,7 +27,7 @@ for scale, cls in {2: UNet2, 4: UNet4, 8: UNet8}.items():
         net.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
         MODELS[scale] = net.eval().to(DEVICE)
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder=HERE / "site", static_url_path="")  # serves the page + samples locally
 
 
 @app.after_request
@@ -40,7 +40,7 @@ def cors(resp):
 
 @app.get("/")
 def index():
-    return send_file(HERE / "site" / "index.html")
+    return app.send_static_file("index.html")
 
 
 @app.get("/health")

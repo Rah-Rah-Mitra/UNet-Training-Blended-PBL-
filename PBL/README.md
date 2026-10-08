@@ -11,6 +11,13 @@ It is built on this repository, a fork of the authors' code
 Everything new lives in `PBL/`; the original code is not modified (only the top-level `README.md` was rewritten as a
 guide). **New here? Read §1, then §7 for the results; §10 walks through the code added for the 1 Oct feedback.**
 
+**Try the trained models in your browser:**
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Rah-Rah-Mitra/UNet-Training-Blended-PBL-/blob/master/demo/colab.ipynb)
+opens the web demo's GPU backend with a T4 already selected. Add your ngrok authtoken as the Colab secret
+`NGROK_AUTHTOKEN` (any free ngrok account works) and choose **Runtime → Run all**. The second cell prints the link to the
+page, https://unetsr-upscaler.vercel.app, which upscales your own images or the built-in samples ×2/×4/×8. Details:
+[`demo/README.md`](../demo/README.md).
+
 | file | what it is |
 |---|---|
 | [`SimplifiedUNetSR.ipynb`](SimplifiedUNetSR.ipynb) | **all of the code**: data pipeline, model, losses, metrics, training, evaluation against the paper, figures, inference |

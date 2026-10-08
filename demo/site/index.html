@@ -13,7 +13,19 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
-  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  main { max-width: 1160px; margin: 0 auto; padding: 24px 16px 48px; }
+  .layout { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 20px; align-items: start; }
+  aside h2 { font-size: .9rem; font-weight: 600; color: var(--muted); margin: 0 0 8px; }
+  #samples { display: grid; gap: 10px; }
+  .sample { display: block; width: 100%; padding: 0; text-align: left; background: var(--card); color: var(--fg);
+            border: 2px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .sample[aria-pressed=true] { border-color: var(--accent); }
+  .sample img { display: block; width: 100%; height: 96px; object-fit: cover; }
+  .sample span { display: block; padding: 4px 8px; font-size: .85rem; }
+  @media (max-width: 640px) {
+    .layout { grid-template-columns: 1fr; }
+    #samples { grid-auto-flow: column; grid-auto-columns: 120px; overflow-x: auto; padding-bottom: 4px; }
+  }
   header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
   h1 { font-size: 1.5rem; margin: 0; }
   p { color: var(--muted); margin: 4px 0 20px; }
@@ -45,6 +57,12 @@
   <p>Super-resolution with the simplified U-Net (Lu &amp; Chen, 2019). Upload a small image and it comes back 2, 4 or 8 times larger.
      The longest side may be at most 2048 px at ×2, 1024 px at ×4 and 512 px at ×8.</p>
 
+  <div class="layout">
+  <aside>
+    <h2>Try a sample</h2>
+    <div id="samples"></div>
+  </aside>
+  <section>
   <form id="form">
     <input id="file" type="file" accept="image/*" required aria-label="Image to upscale">
     <label>Scale <select id="scale"><option value="2">×2</option></select></label>
@@ -56,10 +74,16 @@
     <figure><figcaption><span>Input (resized by the browser)</span><span id="inSize"></span></figcaption><img id="inp" alt=""></figure>
     <figure><figcaption><span>UNetSR output</span><span><span id="outSize"></span> <a id="dl" hidden>Download</a></span></figcaption><img id="out" alt=""></figure>
   </div>
+  </section>
+  </div>
 </main>
 <script>
 // Locally the Flask server serves this page; anywhere else (Vercel) it talks to the Colab GPU through ngrok.
-const API = ['localhost', '127.0.0.1'].includes(location.hostname) ? '' : 'https://evolved-oarfish-guiding.ngrok-free.app';
+// ?api=https://… points it at someone else's tunnel (colab.ipynb prints that link when it can't use the default domain).
+const LOCAL = ['localhost', '127.0.0.1'].includes(location.hostname);
+const custom = new URLSearchParams(location.search).get('api');
+const API = custom && /^https:\/\/[^/]+$/.test(custom) ? custom
+          : LOCAL ? '' : 'https://evolved-oarfish-guiding.ngrok-free.app';
 const H = { 'ngrok-skip-browser-warning': '1' };  // without it ngrok's free tier answers with an HTML warning page
 const $ = id => document.getElementById(id);
 let busy = false;
@@ -82,7 +106,26 @@ async function health() {
 health();
 setInterval(() => busy || health(), 15000);
 
+// Low-res test images (Set14 and BSD300 test sets), shrunk bilinearly like the training inputs.
+const SAMPLES = [['monarch', 'Monarch'], ['zebra', 'Zebra'], ['comic', 'Comic'],
+                 ['tiger', 'Tiger'], ['castle', 'Castle'], ['clownfish', 'Clownfish']];
+for (const [id, label] of SAMPLES) {
+  const b = document.createElement('button');
+  b.className = 'sample'; b.type = 'button'; b.setAttribute('aria-pressed', 'false');
+  b.innerHTML = `<img src="samples/${id}.png" alt=""><span>${label}</span>`;
+  b.onclick = async () => {
+    const blob = await (await fetch(`samples/${id}.png`)).blob();
+    const dt = new DataTransfer();  // load the sample into the file input, so it takes the same path as an upload
+    dt.items.add(new File([blob], `${id}.png`, { type: blob.type }));
+    $('file').files = dt.files;
+    $('file').onchange();
+    b.setAttribute('aria-pressed', 'true');
+  };
+  $('samples').append(b);
+}
+
 $('file').onchange = () => {
+  document.querySelectorAll('.sample').forEach(s => s.setAttribute('aria-pressed', 'false'));
   const f = $('file').files[0];
   $('inp').src = f ? URL.createObjectURL(f) : '';
   $('out').removeAttribute('src'); $('outSize').textContent = ''; $('dl').hidden = true; $('msg').textContent = '';
