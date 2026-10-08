@@ -28,6 +28,8 @@ guide). **New here? Read §1, then §7 for the results; §10 walks through the c
 | [`results/ablation_x8_BSD300_15ep_mixge_raw`](results/ablation_x8_BSD300_15ep_mixge_raw/) | the literal-Sobel MixGE run of the §2 ablation |
 | [`results/final_results.md`](results/final_results.md) | **the final results (§7)**: Table A, ours vs the paper's Table 2; Table B, robustness to blur |
 | [`results/final/`](results/final/) | one folder per final run: config, per-epoch history, metrics, blur sweep, figures |
+| [`results/x2_blur_showcase.md`](results/x2_blur_showcase.md) | **×2 on realistic blur**: soft lens, defocus, camera shake and bicubic shrinking, on five test images, before and after fine-tuning |
+| [`blur_showcase.py`](blur_showcase.py) | regenerates that page from the two ×2 models in `runs/` (`uv run python blur_showcase.py`, about 3 min) |
 
 **Feedback of 1 Oct 2026 and where it is addressed**
 
@@ -548,7 +550,10 @@ sweep**: the BSD300 test split, blurred by σ = 0 … 1 LR px before the down-sc
 * **Figures:**
   * [`summary_blur.png`](results/final/summary_blur.png) plots every curve;
   * [`blur_examples.png`](results/final/BSD300_x4_mixge_rand_ft_lr0.0001/figures/blur_examples.png) shows one test
-    image at σ = 0, 0.5 and 1.0, before and after fine-tuning.
+    image at σ = 0, 0.5 and 1.0, before and after fine-tuning;
+  * [`x2_blur_showcase.md`](results/x2_blur_showcase.md) tries the ×2 models on blur closer to real photos: soft
+    lens, defocus, camera shake and bicubic shrinking. Fine-tuning helps with all round blurs, but not with camera
+    shake.
 
 ### 7.3 How the results developed
 
