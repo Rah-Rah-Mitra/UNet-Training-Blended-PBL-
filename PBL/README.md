@@ -14,6 +14,8 @@ guide). **New here? Read §1, then §7 for the results; §10 walks through the c
 | file | what it is |
 |---|---|
 | [`SimplifiedUNetSR.ipynb`](SimplifiedUNetSR.ipynb) | **all of the code**: data pipeline, model, losses, metrics, training, evaluation against the paper, figures, inference |
+| [`SimplifiedUNetSR.md`](SimplifiedUNetSR.md) | **read this on GitHub**: the notebook with its saved outputs as Markdown, with figures in `SimplifiedUNetSR_files/`. GitHub cannot render the 6 MB notebook itself |
+| [`notebook_to_markdown.py`](notebook_to_markdown.py) | regenerates that copy: `uv run python notebook_to_markdown.py` (standard library only) |
 | [`download_datasets.py`](download_datasets.py) | downloads BSD300, SET14 and ICDAR2003 into `PBL/data/` (Python standard library only) |
 | [`dataset_manifest.json`](dataset_manifest.json) | pinned mirror commits and the SHA-256 of every image, used to verify downloads |
 | [`pyproject.toml`](pyproject.toml), [`.python-version`](.python-version) | uv project: Python 3.12, PyTorch as `cpu` / `cu126` / `cu130` extras |
@@ -91,6 +93,9 @@ uv run papermill SimplifiedUNetSR.ipynb runs/smoke.ipynb -p SMOKE_TEST True     
 uv run papermill SimplifiedUNetSR.ipynb runs/BSD300_x4_mixge.ipynb -p SCALE 4 -p LOSS mixge
 uv run papermill SimplifiedUNetSR.ipynb runs/calibrate.ipynb -p MODE calibrate    # protocol study, no training
 ```
+
+When you commit new outputs in the notebook, refresh its GitHub-readable copy too:
+`uv run python notebook_to_markdown.py` rewrites `SimplifiedUNetSR.md` and `SimplifiedUNetSR_files/`.
 
 **The pip / requirements.txt route**, if you prefer it:
 
