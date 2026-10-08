@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UNetSR Upscaler</title>
+<style>
+  :root { --bg: #fafaf9; --fg: #1c1917; --muted: #78716c; --card: #fff; --line: #e7e5e4;
+          --accent: #2563eb; --ok: #15803d; --off: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0c0a09; --fg: #f5f5f4; --muted: #a8a29e; --card: #1c1917; --line: #292524;
+            --accent: #60a5fa; --ok: #4ade80; --off: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  p { color: var(--muted); margin: 4px 0 20px; }
+  .pill { font-size: .85rem; padding: 2px 10px; border-radius: 99px; border: 1px solid currentColor; color: var(--muted); }
+  .pill.ok { color: var(--ok); } .pill.off { color: var(--off); }
+  form { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 16px;
+         background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+  input[type=file] { flex: 1 1 240px; min-width: 0; }
+  select, button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line);
+                   background: var(--bg); color: var(--fg); }
+  button { background: var(--accent); border-color: var(--accent); color: #fff; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  #msg { min-height: 1.5em; margin: 12px 0; color: var(--muted); }
+  #msg.err { color: var(--off); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  figure { margin: 0; }
+  figcaption { font-size: .9rem; color: var(--muted); margin-bottom: 6px; display: flex; justify-content: space-between; }
+  figure img { width: 100%; display: block; border-radius: 8px; border: 1px solid var(--line); min-height: 80px; background: var(--card); }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>UNetSR upscaler</h1>
+    <span id="status" class="pill">Checking backend…</span>
+  </header>
+  <p>Super-resolution with the simplified U-Net (Lu &amp; Chen, 2019). Upload a small image and it comes back 2, 4 or 8 times larger.
+     The longest side may be at most 2048 px at ×2, 1024 px at ×4 and 512 px at ×8.</p>
+
+  <form id="form">
+    <input id="file" type="file" accept="image/*" required aria-label="Image to upscale">
+    <label>Scale <select id="scale"><option value="2">×2</option></select></label>
+    <button id="go" disabled>Upscale</button>
+  </form>
+  <div id="msg" role="status"></div>
+
+  <div class="grid">
+    <figure><figcaption><span>Input (resized by the browser)</span><span id="inSize"></span></figcaption><img id="inp" alt=""></figure>
+    <figure><figcaption><span>UNetSR output</span><span><span id="outSize"></span> <a id="dl" hidden>Download</a></span></figcaption><img id="out" alt=""></figure>
+  </div>
+</main>
+<script>
+// Locally the Flask server serves this page; anywhere else (Vercel) it talks to the Colab GPU through ngrok.
+const API = ['localhost', '127.0.0.1'].includes(location.hostname) ? '' : 'https://evolved-oarfish-guiding.ngrok-free.app';
+const H = { 'ngrok-skip-browser-warning': '1' };  // without it ngrok's free tier answers with an HTML warning page
+const $ = id => document.getElementById(id);
+let busy = false;
+
+async function health() {
+  try {
+    const j = await (await fetch(API + '/health', { headers: H })).json();
+    $('status').textContent = j.device === 'cuda' ? 'GPU online' : 'Online (CPU)';
+    $('status').className = 'pill ok';
+    const keep = $('scale').value;
+    $('scale').innerHTML = j.scales.map(s => `<option value="${s}">×${s}</option>`).join('');
+    if (j.scales.includes(+keep)) $('scale').value = keep;
+    $('go').disabled = busy;
+  } catch {
+    $('status').textContent = 'Backend offline: start the Colab notebook';
+    $('status').className = 'pill off';
+    $('go').disabled = true;
+  }
+}
+health();
+setInterval(() => busy || health(), 15000);
+
+$('file').onchange = () => {
+  const f = $('file').files[0];
+  $('inp').src = f ? URL.createObjectURL(f) : '';
+  $('out').removeAttribute('src'); $('outSize').textContent = ''; $('dl').hidden = true; $('msg').textContent = '';
+};
+$('inp').onload = e => $('inSize').textContent = `${e.target.naturalWidth}×${e.target.naturalHeight}`;
+$('out').onload = e => $('outSize').textContent = `${e.target.naturalWidth}×${e.target.naturalHeight}`;
+
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  const f = $('file').files[0], s = $('scale').value;
+  const body = new FormData();
+  body.append('image', f);
+  body.append('scale', s);
+  busy = true; $('go').disabled = true;
+  $('msg').className = ''; $('msg').textContent = `Upscaling ×${s}…`;
+  const t0 = performance.now();
+  try {
+    const r = await fetch(API + '/upscale', { method: 'POST', body, headers: H });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Server error ${r.status}`);
+    const url = URL.createObjectURL(await r.blob());
+    $('out').src = url;
+    $('dl').href = url; $('dl').download = f.name.replace(/\.[^.]+$/, '') + `_x${s}.png`; $('dl').hidden = false;
+    $('msg').textContent = `Done in ${((performance.now() - t0) / 1000).toFixed(1)} s.`;
+  } catch (err) {
+    $('msg').className = 'err';
+    $('msg').textContent = err instanceof TypeError ? 'Could not reach the backend. Is the Colab notebook running?' : err.message;
+  } finally {
+    busy = false; $('go').disabled = false;
+  }
+};
+</script>
+</body>
+</html>

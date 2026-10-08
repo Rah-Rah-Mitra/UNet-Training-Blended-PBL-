@@ -16,6 +16,7 @@ unchanged next to it.
 | run it | [`PBL/README.md` §1](PBL/README.md#1-quick-start-uv): four commands with uv, on any NVIDIA GPU, Apple Silicon or CPU |
 | read the code | [`PBL/SimplifiedUNetSR.md`](PBL/SimplifiedUNetSR.md): all of the code, in 13 sections, with the outputs of the last run. It is a Markdown copy of [`PBL/SimplifiedUNetSR.ipynb`](PBL/SimplifiedUNetSR.ipynb), which GitHub cannot display |
 | see the results | [`PBL/results/final_results.md`](PBL/results/final_results.md): Table A (ours vs the paper), Table B (robustness to blur) |
+| try it in the browser | [`demo/README.md`](demo/README.md): a web page (Vercel) that upscales your image on a Colab GPU |
 | see the model on real-photo blur | [`PBL/results/x2_blur_showcase.md`](PBL/results/x2_blur_showcase.md): ×2 before/after under soft lens, defocus, camera shake and bicubic shrinking |
 | understand the results | [`PBL/README.md` §7](PBL/README.md#7-does-it-perform-like-the-paper) |
 | explain the latest changes (meeting of 1 Oct 2026) | [`PBL/README.md` §10](PBL/README.md#10-code-guide-what-was-added-for-the-1-oct-feedback): code guide and a ten-minute talk outline |
