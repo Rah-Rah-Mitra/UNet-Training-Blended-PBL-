@@ -20,7 +20,7 @@ The session has three jobs:
 
 ## Context
 
-* **Repository and branch:** `rah-rah-mitra/unet-training-blended-pbl-`, branch **`pbl/unet-sr-notebook`**. The
+* **Repository and branch:** `rah-rah-mitra/unet-training-blended-pbl-`, branch **`master`**. The
   repository is a fork of the authors' code, `Mnster00/simplifiedUnetSR`.
 * **Scope:** everything new lives in `PBL/`. Do not modify the original files outside `PBL/`.
 * **What is in `PBL/`:**
@@ -43,8 +43,8 @@ The session has three jobs:
 
 ## Rules
 
-* Work and push on **`pbl/unet-sr-notebook`** (`git push origin pbl/unet-sr-notebook`). Do not push to `master`, and
-  do not open a pull request unless the user asks for one.
+* Work on a new branch cut from **`master`** and push that branch (`git push -u origin <branch>`). Do not push to
+  `master`, and do not open a pull request unless the user asks for one.
 * Never commit `data/`, `runs/` (except `runs/.gitkeep`), `.venv/`, `uv.lock` or `*.pt`. The `.gitignore` already
   excludes them.
 * **The notebook is the only copy of the code.** Edit its cells directly.
@@ -167,7 +167,7 @@ Run **×8 on BSD300 with MixGE (UnetSR+)**, the paper's settings for up to 300 e
    * the T1–T15 table (PASS / FAIL, fixes made);
    * the training result against the paper.
 2. Commit the fixes, `results/gpu_*` and the README updates, with clear messages (see the rule above on the notebook's outputs).
-   Then run `git push origin pbl/unet-sr-notebook`.
+   Then push your branch (`git push -u origin <branch>`).
 3. Delete scratch folders you created (`empty_data`, `~/pbl_data_test`). `runs/` is git-ignored, so it can stay.
 
 ---
