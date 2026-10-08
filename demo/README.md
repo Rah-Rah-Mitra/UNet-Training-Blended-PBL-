@@ -4,7 +4,7 @@ Upload an image and get it back ×2, ×4 or ×8 larger from the PBL UNetSR model
 
 | piece | where it runs |
 |---|---|
-| [`site/index.html`](site/index.html): the page, one static file | Vercel (root directory `demo/site`, no build) |
+| [`site/index.html`](site/index.html): the page, one static file | Vercel project `unetsr-upscaler` (<https://unetsr-upscaler.vercel.app>), deployed from `demo/site` with `vercel deploy --prod` |
 | [`server.py`](server.py): Flask, `GET /health` and `POST /upscale` | your machine, or a Colab GPU behind ngrok |
 | [`colab.ipynb`](colab.ipynb): starts `server.py` on Colab and opens the tunnel | [Open in Colab](https://colab.research.google.com/github/Rah-Rah-Mitra/UNet-Training-Blended-PBL-/blob/web-demo/demo/colab.ipynb) |
 
@@ -27,6 +27,6 @@ Needs torch, Pillow, numpy, flask and matplotlib (the authors' model file import
 
 1. Open the notebook in Colab with **Open in Colab** above. It is preset to a T4 GPU. Add the Colab secret `NGROK_AUTHTOKEN`, then choose **Run all**.
 2. The last cell keeps the server running at `https://evolved-oarfish-guiding.ngrok-free.app`. That is the account's fixed ngrok dev domain, and the page has it hardcoded.
-3. Open the Vercel site. The badge shows *GPU online* while the notebook runs and *Backend offline* when it doesn't.
+3. Open https://unetsr-upscaler.vercel.app. The badge shows *GPU online* while the notebook runs and *Backend offline* when it doesn't.
 
 Limits: the longest side of the input may be at most 4096 / scale px. Requests run one at a time.
