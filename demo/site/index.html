@@ -31,6 +31,9 @@
   p { color: var(--muted); margin: 4px 0 20px; }
   .pill { font-size: .85rem; padding: 2px 10px; border-radius: 99px; border: 1px solid currentColor; color: var(--muted); }
   .pill.ok { color: var(--ok); } .pill.off { color: var(--off); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .colab { font-size: .85rem; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--accent); text-decoration: none; }
+  .colab:hover { background: var(--accent); color: #fff; }
   form { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 16px;
          background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
   input[type=file] { flex: 1 1 240px; min-width: 0; }
@@ -52,7 +55,11 @@
 <main>
   <header>
     <h1>UNetSR upscaler</h1>
-    <span id="status" class="pill">Checking backend…</span>
+    <div class="actions">
+      <a class="colab" href="https://colab.research.google.com/github/Rah-Rah-Mitra/UNet-Training-Blended-PBL-/blob/master/demo/colab.ipynb"
+         target="_blank" rel="noopener">Run the backend on Colab ↗</a>
+      <span id="status" class="pill">Checking backend…</span>
+    </div>
   </header>
   <p>Super-resolution with the simplified U-Net (Lu &amp; Chen, 2019). Upload a small image and it comes back 2, 4 or 8 times larger.
      The longest side may be at most 2048 px at ×2, 1024 px at ×4 and 512 px at ×8.</p>
@@ -98,7 +105,7 @@ async function health() {
     if (j.scales.includes(+keep)) $('scale').value = keep;
     $('go').disabled = busy;
   } catch {
-    $('status').textContent = 'Backend offline: start the Colab notebook';
+    $('status').textContent = 'Backend offline: start it with the Colab button';
     $('status').className = 'pill off';
     $('go').disabled = true;
   }
