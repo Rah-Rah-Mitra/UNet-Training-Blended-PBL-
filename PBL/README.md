@@ -8,7 +8,8 @@ This folder is a reproducible, single-notebook PyTorch re-implementation of
 It is built on this repository, a fork of the authors' code
 [`Mnster00/simplifiedUnetSR`](https://github.com/Mnster00/simplifiedUnetSR) (the paper's footnote links it as
 `github.com/MnisterLu/simplifiedUnetSR`).
-Everything new lives in `PBL/`; the original code is not modified.
+Everything new lives in `PBL/`; the original code is not modified (only the top-level `README.md` was rewritten as a
+guide). **New here? Read §1, then §7 for the results; §10 walks through the code added for the 1 Oct feedback.**
 
 | file | what it is |
 |---|---|
@@ -47,7 +48,8 @@ Everything new lives in `PBL/`; the original code is not modified.
 7. [Does it perform like the paper?](#7-does-it-perform-like-the-paper)
 8. [Notes on the original code](#8-notes-on-the-original-code)
 9. [Troubleshooting](#9-troubleshooting)
-10. [Citation](#10-citation)
+10. [Code guide: what was added for the 1 Oct feedback](#10-code-guide-what-was-added-for-the-1-oct-feedback)
+11. [Citation](#11-citation)
 
 ---
 
@@ -632,7 +634,158 @@ The repository is a 2019 fork of [`icpm/super-resolution`](https://github.com/ic
 
 ---
 
-## 10 Citation
+## 10 Code guide: what was added for the 1 Oct feedback
+
+This section covers only the code added for the feedback of the 1 Oct 2026 meeting. The paper reproduction itself
+(model, losses, metrics, protocol) is described in §2–§6 and did not change: with the default settings the notebook
+gives bit-identical results to before.
+
+### 10.1 The story in four sentences
+
+1. The paper trains on **one fixed degradation**, a bilinear down-scaling, and ×8 inputs are very blurred (§7.2).
+2. The new option **`DEGRADATION="random"`** gives every training image, in every epoch, a random Gaussian blur and a
+   random down-sampler, so that the network cannot over-fit to one kernel.
+3. **`FINETUNE_FROM`** adapts an already-trained paper model to that varied blur, and the **blur sweep** scores every
+   model on test images blurred by increasing amounts.
+4. **Section 12** collects all final runs into Table A (ours vs the paper) and Table B (robustness to blur).
+
+```mermaid
+flowchart LR
+  HR["HR crop 256x256<br/>(protocol, unchanged)"] --> F["DEGRADATION = fixed<br/>bilinear ↓s<br/>(the paper)"]
+  HR --> R["DEGRADATION = random<br/>random_lr(): blur σ ~ U[0, BLUR_MAX]<br/>+ bilinear / bicubic / box ↓s<br/>new draw every epoch"]
+  HR --> T["blur sweep test sets<br/>load_pairs(blur=σ), σ in BLUR_TEST<br/>then bilinear ↓s"]
+  F --> M1["train 300 epochs<br/>runs/BSD300_x4_mixge"]
+  M1 -->|FINETUNE_FROM| M2["fine-tune 100 epochs, LR 1e-4<br/>on random LR inputs"]
+  R --> M2
+  T --> E["blur sweep: bicubic, model before<br/>and after fine-tuning, per σ"]
+  M1 --> E
+  M2 --> E
+  E --> S["section 12: Table A + Table B<br/>runs/summary.md"]
+```
+
+### 10.2 Where the new code lives
+
+Everything is in [`SimplifiedUNetSR.ipynb`](SimplifiedUNetSR.ipynb), in the order the notebook runs.
+
+| step | notebook section | code | what it does |
+|---|---|---|---|
+| 1 | §1 Parameters | `DEGRADATION`, `BLUR_MAX`, `BLUR_TEST`, `FINETUNE_FROM` | the four switches. The defaults (`"fixed"`, `None`) leave the paper reproduction unchanged |
+| 2 | §2 (settings cell) | `DEFAULTS`, run-name tags `rand`, `blur…`, `ft` | each new setting gets its own run folder, and resuming refuses a checkpoint trained with other settings |
+| 3 | §3 (data functions) | `gaussian_blur(x, sigma)` | isotropic Gaussian blur: a separable `conv2d`, reflect padding, radius 3σ. Returns its input unchanged at σ = 0 |
+| | | `blur_hr(hr, sigma_hr)` | blurs a PIL image with `gaussian_blur` and rounds it back to 8 bit |
+| | | `random_lr(hr)` | **the core of the change**: draws σ ~ U[0, `BLUR_MAX`] LR px and a filter from `RANDOM_FILTERS`, then builds a new LR image |
+| | | `SRPairs(..., degrade=True)` | the training set calls `random_lr` in every `__getitem__`, so each epoch sees different LR images of the same HR crops |
+| | | `load_pairs(..., blur=σ)` | builds fixed blurred test pairs; the HR target stays sharp |
+| 4 | §3 (data cell) | `BLUR_SETS` | the test split once per σ in `BLUR_TEST`. An `assert` checks that σ = 0 gives exactly the paper's LR images |
+| 5 | §3b | `lr_detail`, `degradation_preview` | the table and figure of how much detail each scale and blur leaves: the evidence behind `BLUR_MAX` = 0.5 |
+| 6 | §8 (setup cell) | `if FINETUNE_FROM:` | loads `runs/<parent>/unetsr_x<s>_<loss>.pt` into the model before training, and checks that the scale matches |
+| 7 | §9 | `BLUR_NETS`, `BLUR_SWEEP` | scores bicubic, the parent model (when fine-tuned) and this model on every `BLUR_SETS` entry. Writes `blur_sweep.csv` and `metrics.json["blur_sweep"]` |
+| 8 | §10 | `show_examples(rows, nets)`, blur-sweep cell | before/after figures; the blur-sweep plot (`blur_sweep.png`) and one test image at increasing blur (`blur_examples.png`) |
+| 9 | §12 | `final_runs()`, `TABLE_A`, `TABLE_B` | picks the final run of each configuration and writes both tables to `runs/summary.md`, plus `summary_blur.png` |
+
+### 10.3 The key code
+
+The whole randomised degradation is these two functions (notebook §3):
+
+```python
+def gaussian_blur(x, sigma):
+    """Isotropic Gaussian blur (standard deviation `sigma` pixels) of a float [B,C,H,W] tensor, reflect padding."""
+    if sigma <= 0:
+        return x
+    r = math.ceil(3 * sigma)
+    g = torch.exp(-torch.arange(-r, r + 1, dtype=torch.float64) ** 2 / (2 * sigma ** 2))
+    g = (g / g.sum()).to(x)
+    c = x.shape[1]
+    x = F.pad(x, (r, r, r, r), mode="reflect")
+    x = F.conv2d(x, g.view(1, 1, 1, -1).expand(c, 1, 1, -1), groups=c)          # separable: along the rows ...
+    return F.conv2d(x, g.view(1, 1, -1, 1).expand(c, 1, -1, 1), groups=c)    # ... then along the columns
+
+
+def random_lr(hr, scale=None, blur_max=None):
+    scale = scale or SCALE
+    blur_max = BLUR_MAX if blur_max is None else blur_max
+    sigma = float(torch.rand(())) * blur_max                                       # sigma ~ U[0, BLUR_MAX] LR pixels
+    lr_filter = RANDOM_FILTERS[int(torch.randint(len(RANDOM_FILTERS), ()))]       # bilinear, bicubic or box
+    hr = Image.fromarray(hr.permute(1, 2, 0).numpy())
+    return to_uint8_tensor(make_lr(blur_hr(hr, sigma * scale), scale, lr_filter))
+```
+
+Three details matter when you explain it:
+
+* **σ is in LR pixels**, so one value works for ×2, ×4 and ×8. The blur is applied to the HR image, so it is
+  multiplied by the scale: 0.5 LR px is 1, 2 or 4 HR px.
+* **The blur happens before the down-scaling**, as in the classical model y = (x ⊗ k)↓s. The HR target is never
+  blurred.
+* **The random draws use PyTorch's global random-number generator**, which `last.pt` already saves. A resumed run
+  therefore continues with exactly the same draws.
+
+Fine-tuning is equally short (notebook §8):
+
+```python
+if FINETUNE_FROM:
+    parent_cfg = json.loads((RUNS_DIR / FINETUNE_FROM / "config.json").read_text())
+    assert parent_cfg["SCALE"] == SCALE
+    PARENT_WEIGHTS = RUNS_DIR / FINETUNE_FROM / f"unetsr_x{SCALE}_{parent_cfg['LOSS']}.pt"
+    model.load_state_dict(torch.load(PARENT_WEIGHTS, weights_only=True))
+```
+
+### 10.4 Running each piece
+
+From `PBL/`:
+
+```bash
+# 20-second check of the new path: random blur + fine-tuning from a smoke run
+uv run papermill SimplifiedUNetSR.ipynb runs/smoke.ipynb -p SMOKE_TEST True
+uv run papermill SimplifiedUNetSR.ipynb runs/smoke_ft.ipynb -p SMOKE_TEST True -p DEGRADATION random -p FINETUNE_FROM BSD300_x4_mixge_smoke
+
+# the real thing at x4: the paper model (about 15 min), then the random-blur fine-tune (about 8 min)
+uv run papermill SimplifiedUNetSR.ipynb runs/BSD300_x4_mixge.ipynb -p SCALE 4 -p LOSS mixge -p EVAL_EVERY 10
+uv run papermill SimplifiedUNetSR.ipynb runs/BSD300_x4_ft.ipynb -p SCALE 4 -p LOSS mixge -p DEGRADATION random \
+  -p FINETUNE_FROM BSD300_x4_mixge -p LR 1e-4 -p EPOCHS 100 -p EVAL_EVERY 5
+
+# score a BSD300 model on the SET14 test images as well (re-evaluates only: nothing left to train)
+uv run papermill SimplifiedUNetSR.ipynb runs/BSD300_x4_set14.ipynb -p SCALE 4 -p LOSS mixge -p EVAL_SETS "BSD300,SET14"
+```
+
+§7.4 has the whole grid. Section 12 of the last run's notebook holds Tables A and B over everything in `runs/`.
+
+### 10.5 How the changes were checked
+
+| check | result |
+|---|---|
+| the paper path is unchanged | the old and new notebooks give bit-identical smoke results on CPU (12.2555 dB / 0.3222) |
+| σ = 0 is the paper's test set | an `assert` compares the LR tensors in every run |
+| random blur resumes exactly | on CPU, a 3-epoch run and a 2 + 1-epoch resumed run end on the same loss and PSNR (19.70258551597595 dB) |
+| the protocol study is unchanged | `MODE=calibrate` rewrites both committed CSVs byte for byte |
+| the blur level is sensible | the preview was checked by eye before any training; the detail table in §7.2 backs `BLUR_MAX` = 0.5 |
+
+### 10.6 Explaining it in ten minutes
+
+An order that works for an audience that knows what super-resolution is:
+
+1. **The feedback** (1 min): the table at the top of this README, with the six minutes and where each is addressed.
+2. **Why blur matters** (2 min): show
+   [`degradation_preview.png`](results/final/degradation_preview.png). ×8 leaves a 32×32 smear, every down-scaling
+   already blurs, and the paper trains on only one such blur.
+3. **The idea and the code** (2 min): the y = (x ⊗ k)↓s model and the industry table of §7.2, then the ten lines of
+   `random_lr` (§10.3). The rest is plumbing.
+4. **Fine-tuning** (1 min): the five lines above. The paper model is the starting point, so nothing from the
+   reproduction is lost.
+5. **Results against the paper** (2 min): Table A. ×8 matches. ×2 and ×4 are 0.25–0.78 dB short, and MixGE adds
+   nothing here. The SET14 finding: our BSD300 models beat the paper's SET14 numbers, which an 11-image training set
+   cannot explain.
+6. **Results on blur** (2 min): [`summary_blur.png`](results/final/summary_blur.png) and Table B. The fixed models'
+   gain over bicubic collapses as blur grows. Fine-tuning recovers 0.2–0.3 dB at ×2 and almost nothing at ×4. Then
+   the next experiment: a stronger fine-tune, or random blur from scratch.
+
+Show the before/after figures
+[`examples_BSD300.png`](results/final/BSD300_x4_mixge_rand_ft_lr0.0001/figures/examples_BSD300.png) and
+[`blur_examples.png`](results/final/BSD300_x4_mixge_rand_ft_lr0.0001/figures/blur_examples.png) whenever someone asks
+what the network actually does.
+
+---
+
+## 11 Citation
 
 ```bibtex
 @article{lu2022unetsr,
